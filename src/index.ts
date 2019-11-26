@@ -15,7 +15,7 @@ class PopupService {
             let msg = event.data;
             let cb = that.callbackHandler.get(msg.messageId);
 
-            console.log("popservice send msg >>>>>>>> ", msg)
+            console.log("popservice send msg >>>>>>>> ", JSON.stringify(msg))
             that.callbackHandler.delete(msg.messageId);
             if (cb && typeof cb === "function") {
                 cb(msg);
@@ -64,6 +64,16 @@ class PopupService {
 
     getSeroPrice(ticket: string, cb: any) {
         let message: Message = {method: Method.GetPrice, data: ticket}
+        this.handlerMsg(message, cb)
+    }
+
+    clearData( cb: any) {
+        let message: Message = {method: Method.ClearData, data: null}
+        this.handlerMsg(message, cb)
+    }
+
+    getSyncState(cb: any){
+        let message: Message = {method: Method.HealthyCheck, data: null}
         this.handlerMsg(message, cb)
     }
 

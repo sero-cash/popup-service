@@ -118,11 +118,11 @@ export class PopDB {
         })
     }
 
-    some(name: string, index: any, startIndex: any, endIndex: any) {
+    some(name: string, selecter: any, count: any) {
         return new Promise((resolve, reject) => {
             this.connect().then((db: IDBDatabase) => {
                 const table = new Table(name, db)
-                table.some(index, startIndex, endIndex).then((res: any) => {
+                table.some(selecter, count).then((res: any) => {
                     resolve(res)
                 }).catch((error: any) => {
                     reject(error)

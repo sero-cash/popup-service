@@ -1,6 +1,6 @@
 import {PopDB} from "../db/PopDB";
 import {Message, Method, PriceTickect, Tx} from "./types";
-import {AssetsInfo, dbConfig, Nils, SyncInfo, tables, TxBase, TxInfo, TxType} from './tables';
+import {AssetsInfo, dbConfig, Nils, SyncInfo, tables, TxBase, TxCurrency, TxInfo, TxType} from './tables';
 import utils, {hexToCy, isNewVersion} from "jsuperzk/dist/utils/utils";
 import axios from 'axios';
 import BigNumber from 'bignumber.js';
@@ -14,11 +14,13 @@ import {Asset, Token, Witness, ZPkg} from "jsuperzk/dist/types/types";
 
 let db: Map<string, PopDB> = new Map<string, PopDB>();
 
-let latestSyncTime = null;
+let latestSyncTime = new Date().getTime();
 let syncIntervalId = null;
 let isSyncing = false;
 let syncTime: number = 10 * 1000;
 let rpc = null;
+
+let times = 0 ;
 
 let rpcId = 0;
 
@@ -66,11 +68,11 @@ function commitTx(message: Message) {
     const tx: Tx = message.data
     console.log("commitTx >>> ", message, tx)
     _commitTx(tx).then(hash => {
-        console.log("_commitTx hash:",hash)
+        console.log("_commitTx hash:", hash)
         message.data = hash;
         _postMessage(message)
     }).catch(err => {
-        console.log("_commitTx err:",err)
+        console.log("_commitTx err:", err)
         message.error = err;
         _postMessage(message)
     })
@@ -136,9 +138,9 @@ async function _storePending(tk, signRet, tx: Tx, _db) {
         Num_TxHash: "99999999999_" + signRet.Hash,
         BlockHash: "",
         From: tx.From,
-        Gas: new BigNumber(tx.Gas,16).toNumber(),
-        GasPrice: new BigNumber(tx.GasPrice,16).toNumber(),
-        GasUsed: new BigNumber(tx.Gas,16).toNumber(),
+        Gas: new BigNumber(tx.Gas, 16).toNumber(),
+        GasPrice: new BigNumber(tx.GasPrice, 16).toNumber(),
+        GasUsed: new BigNumber(tx.Gas, 16).toNumber(),
         Num: 99999999999,
         Time: Math.floor(new Date().getTime() / 1000),
         To: tx.To,
@@ -157,45 +159,61 @@ async function _storePending(tk, signRet, tx: Tx, _db) {
         TxType: TxType.out,
         Root: signRet.Hash,
         TxHash_Root_TxType: [signRet.Hash, signRet.Hash, TxType.out].join("_"),
+        Num_TxHash:[txInfo.Num,signRet.Hash].join("_"),
         Asset: asset
     }
     await _db.update(tables.txBase.name, txBase)
+
+    const txCurrency : TxCurrency = {
+        Num:txInfo.Num,
+        TxHash:txInfo.TxHash,
+        Currency:tx.Cy,
+        id:[txInfo.Num,txInfo.TxHash,tx.Cy].join("_"),
+    }
+    await db.get(tk).update(tables.txCurrency.name,txCurrency)
 }
 
 async function _commitTx(tx: Tx): Promise<string | null> {
+
     let tk = tx.From;
     if (!db || !db.get(tk)) {
-        return
-    }
-    const _db = db.get(tk);
-    const acInfo: SyncInfo = <SyncInfo>await _db.selectId(tables.syncInfo.name, 1)
+        return new Promise<string | null>((resolve, reject) => {
+            reject("Account is invalid! ")
+        })
 
-    const preTxParam = _genPrePramas(tx, acInfo);
-    console.log("tx >>> preTxParam: ", preTxParam, JSON.stringify(preTxParam));
-    const rest = await genTxParam(preTxParam, new TxGenerator(), new TxState());
-    rest.Z = false;
-    const signRet = signTx(tx.SK, rest)
-    console.log("tx >>> rest: ", rest, JSON.stringify(rest));
-    console.log("tx >>> signRet: ", signRet, JSON.stringify(signRet));
-    const resp = await jsonRpcReq('sero_commitTx', [signRet])
-    console.log("tx >>> resp: ", resp);
+    }else{
+        const _db = db.get(tk);
+        const acInfo: SyncInfo = <SyncInfo> await _db.selectId(tables.syncInfo.name, 1)
 
-    return new Promise<string | null>((resolve, reject) => {
-        // @ts-ignore
-        if (!resp.data.result) {
-            let txPending = tx;
-            txPending.From = acInfo.PKr
-            if(tx.Data){
-                txPending.From = acInfo.MainPKr
-            }
-            _storePending(tk, signRet, txPending, _db).then().catch(e=>{console.log("e:",e)});
+        const preTxParam = _genPrePramas(tx, acInfo);
+        console.log("tx >>> preTxParam: ", preTxParam, JSON.stringify(preTxParam));
+        const rest = await genTxParam(preTxParam, new TxGenerator(), new TxState());
+        rest.Z = false;
+        const signRet = signTx(tx.SK, rest)
+        console.log("tx >>> rest: ", rest, JSON.stringify(rest));
+        console.log("tx >>> signRet: ", signRet, JSON.stringify(signRet));
+        const resp = await jsonRpcReq('sero_commitTx', [signRet])
+        console.log("tx >>> resp: ", resp);
 
-            resolve(signRet.Hash)
-        } else {
+        return new Promise<string | null>((resolve, reject) => {
             // @ts-ignore
-            reject(resp.data)
-        }
-    })
+            if (!resp.data.result) {
+                let txPending = tx;
+                txPending.From = acInfo.PKr
+                if (tx.Data) {
+                    txPending.From = acInfo.MainPKr
+                }
+                _storePending(tk, signRet, txPending, _db).then().catch(e => {
+                    console.log("e:", e)
+                });
+
+                resolve(signRet.Hash)
+            } else {
+                // @ts-ignore
+                reject(resp.data)
+            }
+        })
+    }
 
 }
 
@@ -293,13 +311,15 @@ function getPKrIndex(message: Message) {
 }
 
 // === message
-function healthyCheck(): boolean {
+function healthyCheck(message: Message) {
     if (!latestSyncTime) {
-        return false
+        message.data = {health: false,latestSyncTime:latestSyncTime, isSyncing: isSyncing}
+        _postMessage(message)
+    } else {
+        const now = new Date().getTime();
+        message.data = {health: (now - latestSyncTime) < 60 * 1000,latestSyncTime:latestSyncTime, isSyncing: isSyncing}
+        _postMessage(message)
     }
-    const now = new Date().getTime();
-    return (now - latestSyncTime) < 60 * 1000
-
 }
 
 function getTxList(message: Message) {
@@ -371,33 +391,32 @@ async function _getTxList(message: Message) {
     if (!db || !db.get(tk)) {
         return
     }
-    let start = data.start;
-    let end = 500;
-    if (data.end) {
-        end = data.end;
-    }
     let count = 10;
     if (data.count) {
         count = data.count;
     }
 
-    const rest: any = await db.get(tk).some(tables.tx.name, "Num_TxHash", start, end);
-
+    const rest: any = await db.get(tk).some(tables.txCurrency.name,{Currency:data.cy}, count)
     let txList = [];
-
     if (rest && rest.length > 0) {
-        for (let txInfo of rest) {
-            const txBases = await db.get(tk).select(tables.txBase.name, {TxHash: txInfo.TxHash});
-            let txDetail: any = await _genTxInfo(txBases, txInfo, data.cy);
-            if (txDetail.Tkn && txDetail.Tkn.size > 0 || txDetail.Tkt && txDetail.Tkt.size > 0) {
-                txList.push(txDetail)
-            }
-            if (txList.length >= count) {
-                break;
+        for(let i=rest.length-1;i>=0;i--){
+            let txCurrency= rest[i];
+            let txInfos:any = await db.get(tk).select(tables.tx.name,{"Num_TxHash":[txCurrency.Num,txCurrency.TxHash].join("_")})
+            if(txInfos && txInfos.length>0) {
+                const txInfo = txInfos[0]
+                const txBases = await db.get(tk).select(tables.txBase.name, {"Num_TxHash": [txCurrency.Num,txInfo.TxHash].join("_")});
+                let txDetail: any = await _genTxInfo(txBases, txInfo, data.cy);
+                if (txDetail.Tkn && txDetail.Tkn.size > 0 || txDetail.Tkt && txDetail.Tkt.size > 0) {
+                    txList.push(txDetail)
+                }
             }
         }
     }
     return new Promise(resolve => {
+        function compare(o1:any,o2:any){
+            return o1.Num-o2.Num;
+        }
+        txList.sort(compare)
         resolve(txList);
     })
 }
@@ -417,8 +436,8 @@ function getTxDetail(message: Message) {
 }
 
 async function _getTxBase(tk, hash: string) {
-    const txInfo = await db.get(tk).select(tables.tx.name, {TxHash: hash});
-    const txBases = await db.get(tk).select(tables.txBase.name, {TxHash: hash});
+    const txInfo = await db.get(tk).select(tables.tx.name, {TxHash:hash});
+    const txBases = await db.get(tk).select(tables.txBase.name, {TxHash:hash});
     return await _genTxInfo(txBases, txInfo[0]);
 }
 
@@ -484,8 +503,50 @@ function initAccount(message: Message) {
 
 }
 
-function clearData() {
+function clearData(message: Message) {
+    _clearData().then(data => {
+        isSyncing = false;
+        message.data = "Success"
+        _postMessage(message)
+    }).catch(e => {
+        isSyncing = false;
+        message.error = e.message
+        _postMessage(message)
+    })
+}
 
+async function _clearData() {
+    if (isSyncing === false) {
+        isSyncing = true;
+        let dbEntries = db.entries();
+        let dbRes = dbEntries.next();
+        while (!dbRes.done) {
+            let _db = dbRes.value[1]
+            await _db.clearTable(tables.utxo.name)
+            await _db.clearTable(tables.txBase.name)
+            await _db.clearTable(tables.assets.name)
+            await _db.clearTable(tables.assetUtxo.name)
+            await _db.clearTable(tables.tx.name)
+            await _db.clearTable(tables.nils.name)
+            await _db.clearTable(tables.txCurrency.name)
+
+            const info: SyncInfo = <SyncInfo>await _db.selectId(tables.syncInfo.name, 1)
+            info.CurrentBlock = 0;
+            info.PKr = info.MainPKr;
+            info.PkrIndex = 1;
+            info.UseHashPKr = false;
+            await _db.update(tables.syncInfo.name, info)
+
+            dbRes = dbEntries.next()
+        }
+        return new Promise(function (resolve) {
+            resolve("Data clear success!")
+        })
+    }else{
+        return new Promise(function (resolve, reject) {
+            reject("Data synchronization...")
+        })
+    }
 }
 
 function findUtxos(tk: string, cy: string, amount: string) {
@@ -498,43 +559,29 @@ function balancesOf(message: Message) {
         return
     }
 
-    db.get(tk).selectAll(tables.assets.name).then((rest:Array<AssetsInfo>)=>{
-        let TknRet: Map<string, string> = new Map<string, string>();
-        if(rest && rest.length>0){
-            rest.forEach(function (value) {
-                TknRet.set(value.Currency,value.Amount)
-            })
-        }
-        message.data = TknRet
-        _postMessage(message)
-    }).catch(err => {
-        message.error = err.message;
-        _postMessage(message)
-    })
+    if(db.get(tk)){
+        _getBalance();
+    }else{
+        setTimeout(function () {
+            _getBalance();
+        },1000)
+    }
 
-    // db.get(tk).select(tables.utxo.name, {TK: tk}).then(utxos => {
-    //     let TknRet: Map<string, string> = new Map<string, string>();
-    //     // @ts-ignore
-    //     for (let utxo of utxos) {
-    //         // @ts-ignore
-    //         if (utxo.Asset && utxo.Asset.Tkn) {
-    //             // @ts-ignore
-    //             let tkn: Map<string, string> = utxo.Asset.Tkn;
-    //             let cy: string = hexToCy(tkn["Currency"]);
-    //             if (TknRet.has(cy)) {
-    //                 let amount = new BigNumber(TknRet.get(cy)).plus(new BigNumber(tkn["Value"])).toString(10);
-    //                 TknRet.set(cy, amount)
-    //             } else {
-    //                 TknRet.set(cy, tkn["Value"])
-    //             }
-    //         }
-    //     }
-    //     message.data = TknRet
-    //     _postMessage(message)
-    // }).catch(err => {
-    //     message.error = err.message;
-    //     _postMessage(message)
-    // })
+    function _getBalance() {
+        db.get(tk).selectAll(tables.assets.name).then((rest: Array<AssetsInfo>) => {
+            let TknRet: Map<string, string> = new Map<string, string>();
+            if (rest && rest.length > 0) {
+                rest.forEach(function (value) {
+                    TknRet.set(value.Currency, value.Amount)
+                })
+            }
+            message.data = TknRet
+            _postMessage(message)
+        }).catch(err => {
+            message.error = err.message;
+            _postMessage(message)
+        })
+    }
 }
 
 function ticketsOf(tk: string): Message {
@@ -578,16 +625,17 @@ function _postMessage(message: Message): void {
 function _startSync(): void {
     syncIntervalId = setInterval(function () {
         try {
-            if (!isSyncing) {
-                isSyncing = true
-                console.log("======= start sync data");
+            if (isSyncing === false) {
+                console.log("======= start sync data,isSyncing=",isSyncing);
                 if (db) {
-                    db.forEach(function (db) {
-                        _fetchOuts(db).then(rest => {
+                    db.forEach(function (_db) {
+                        isSyncing = true
+                        _fetchOuts(_db).then(rest => {
                             console.log("_fetchOuts rest ===> ", rest)
-                            _setLatestSyncTime();
-                            isSyncing = false;
+                            isSyncing = false
                         }).catch(error => {
+                            // _setLatestSyncTime();
+                            isSyncing = false;
                             console.log("_fetchOuts error ===> ", error)
                             throw new Error(error)
                         });
@@ -596,6 +644,7 @@ function _startSync(): void {
             } else {
                 console.log("======= syncing data....")
             }
+            _setLatestSyncTime();
         } catch (e) {
             console.log("sync data error:", e.message)
         }
@@ -603,52 +652,73 @@ function _startSync(): void {
 
 }
 
-async function changeAssets(assets, utxo, db: PopDB,txType:TxType) {
+async function changeAssets(assets, utxo, db: PopDB, txType: TxType) {
 
-    if(utxo.Asset.Tkn){
-        const rootType = [utxo.Root,txType].join("_");
-        const assetsUtxo = await db.select(tables.assetUtxo.name,{RootType:rootType})
+    if (utxo.Asset.Tkn) {
+        const rootType = [utxo.Root, txType].join("_");
+        const assetsUtxo = await db.select(tables.assetUtxo.name, {RootType: rootType})
 
-        if(assets && assets.length > 0){
+        if (assets && assets.length > 0) {
             // @ts-ignore
-            if(assetsUtxo && assetsUtxo.length>0){
-                console.log("asset utxo has set!!",utxo.Root)
-            }else{
+            if (assetsUtxo && assetsUtxo.length > 0) {
+                console.log("asset utxo has set!!", utxo.Root)
+            } else {
                 let asset: AssetsInfo = assets[0];
                 let amount = new BigNumber(utxo.Asset.Tkn.Value);
-                if(txType === TxType.out){
+                if (txType === TxType.out) {
                     amount = amount.multipliedBy(-1)
                 }
                 asset.Amount = new BigNumber(asset.Amount).plus(amount).toString(10);
 
                 let aUtxo = utxo;
-                aUtxo["RootType"]=rootType;
-                await db.update(tables.assetUtxo.name,aUtxo)
+                aUtxo["RootType"] = rootType;
+                await db.update(tables.assetUtxo.name, aUtxo)
                 await db.update(tables.assets.name, asset)
             }
 
-        }else{
+        } else {
             // @ts-ignore
-            if(assetsUtxo && assetsUtxo.length>0){
-                console.log("asset utxo has set!!!",utxo.Root)
-            }else{
+            if (assetsUtxo && assetsUtxo.length > 0) {
+                console.log("asset utxo has set!!!", utxo.Root)
+            } else {
                 let aUtxo = utxo;
-                aUtxo["RootType"]=rootType;
-                await db.update(tables.assetUtxo.name,aUtxo)
+                aUtxo["RootType"] = rootType;
+                await db.update(tables.assetUtxo.name, aUtxo)
 
                 let amount = utxo.Asset.Tkn.Value;
-                if(txType === TxType.out){
+                if (txType === TxType.out) {
                     amount = new BigNumber(utxo.Asset.Tkn.Value).multipliedBy(-1).toString(10);
                 }
                 let asset: AssetsInfo = {
-                    Currency:utils.hexToCy(utxo.Asset.Tkn.Currency),
-                    Amount:amount
+                    Currency: utils.hexToCy(utxo.Asset.Tkn.Currency),
+                    Amount: amount
                 }
                 await db.insert(tables.assets.name, asset)
             }
 
         }
     }
+}
+
+function _deletePending(db: PopDB, txData) {
+    db.select(tables.tx.name, {"Num_TxHash": ["99999999999", txData.TxHash].join("_")}).then((pendingTxs:any)=>{
+        if (pendingTxs && pendingTxs.length > 0) {
+            db.delete(tables.txBase.name, {"TxHash_Root_TxType": [txData.TxHash, txData.TxHash, TxType.out].join("_")}).then(res => {
+            }).catch(err => {
+                console.log(err.message);
+            });
+            db.delete(tables.tx.name, {"Num_TxHash": ["99999999999", txData.TxHash].join("_")}).then(res => {
+            }).catch(err => {
+                console.log(err.message);
+            });
+            db.delete(tables.txCurrency.name, {"TxHash": txData.TxHash}).then(res => {
+            }).catch(err => {
+                console.log(err.message);
+            });
+        }
+    }).catch(err=>{
+        console.log(err.message);
+    })
 }
 
 async function _fetchOuts(db: PopDB) {
@@ -660,10 +730,11 @@ async function _fetchOuts(db: PopDB) {
     // @ts-ignore
     for (let info of infos) {
         let syncInfo = info;
+        let start = 0;
+        let end = null;
 
         while (true) {
-            let start = 0;
-            let end = null;
+
             if (!info.CurrentBlock || info.CurrentBlock === 0) {
             } else {
                 start = info.CurrentBlock;
@@ -671,16 +742,15 @@ async function _fetchOuts(db: PopDB) {
             const rtn = await fetchAndIndex(info.TK, info.PkrIndex, info.UseHashPKr, start, end);
 
             if (rtn.utxos && rtn.utxos.length > 0) {
-                for(let utxo of rtn.utxos){
+                for (let utxo of rtn.utxos) {
                     utxo["TK"] = info.TK;
                     const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
-                    const assets = await db.select(tables.assets.name,{Currency:currency});
-
+                    const assets = await db.select(tables.assets.name, {Currency: currency});
                     await db.update(tables.utxo.name, utxo)
-                    await changeAssets(assets, utxo, db,TxType.in);
+                    await changeAssets(assets, utxo, db, TxType.in);
 
                     if (utxo.Nils) {
-                        for(let nil of utxo.Nils){
+                        for (let nil of utxo.Nils) {
                             let nils: Nils = {Nil: nil, Root: utxo.Root}
                             await db.update(tables.nils.name, nils);
                         }
@@ -689,12 +759,11 @@ async function _fetchOuts(db: PopDB) {
             }
 
             if (rtn.txInfos && rtn.txInfos.length > 0) {
-                for(let txData of rtn.txInfos){
+                for (let txData of rtn.txInfos) {
                     txData.TK = info.TK
                     txData.Num_TxHash = txData.Num + "_" + txData.TxHash;
 
-                    db.delete(tables.txBase.name,{"TxHash_Root_TxType":[txData.TxHash,txData.TxHash,TxType.out].join("_")}).then(res=>{}).catch(err=>{});
-                    db.delete(tables.tx.name,{"Num_TxHash":["99999999999",txData.TxHash].join("_")}).then(res=>{}).catch(err=>{});
+                    _deletePending(db, txData);
 
                     await db.update(tables.tx.name, txData);
                 }
@@ -720,21 +789,17 @@ async function _fetchOuts(db: PopDB) {
         }
         await db.update(tables.syncInfo.name, syncInfo)
 
-        _checkNil(info.TK).then(rest => {
-            console.log("_checkNil rest ===> ", rest)
-        }).catch(error => {
-            console.log("_checkNil error ===> ", error)
-            throw new Error(error)
-        });
+        await _checkNil(info.TK)
 
     }
 }
 
 function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start: number, end: any): Promise<fetchRest> {
+    console.log("fetchAndIndex>>>> ",pkrIndex,useHashPkr,start,end);
     return new Promise((resolve, reject) => {
         const pkrRest = genPKrs(tk, pkrIndex, useHashPkr);
         let param = [];
-        if (end) {
+        if (end && end>0) {
             let currentPkr = []
             pkrRest.CurrentPKrMap.forEach(((value, key) => {
                 currentPkr.push(key)
@@ -779,10 +844,26 @@ function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start:
                                 TxType: TxType.in,
                                 Root: blockData.Out.Root,
                                 Asset: utxos[0].Asset,
-                                TxHash_Root_TxType: [txInfo.TxHash, txInfo.Root, TxType.in].join("_")
+                                TxHash_Root_TxType: [txInfo.TxHash, txInfo.Root, TxType.in].join("_"),
+                                Num_TxHash:[txInfo.Num,txInfo.TxHash].join("_"),
                             }
 
                             txInfos.push(txInfo);
+
+                            if(utxos[0].Asset && utxos[0].Asset.Tkn){
+                                const cy = utils.hexToCy(utxos[0].Asset.Tkn.Currency);
+                                const txCurrency : TxCurrency = {
+                                    Num:txInfo.Num,
+                                    TxHash:txInfo.TxHash,
+                                    Currency:cy,
+                                    id:[txInfo.Num,txInfo.TxHash,cy].join("_"),
+                                }
+                                db.get(tk).update(tables.txCurrency.name,txCurrency).then(rest => {
+                                    console.log("index txCurrency success")
+                                }).catch(err => {
+                                    console.log(err)
+                                });
+                            }
 
                             db.get(tk).update(tables.txBase.name, txBase).then(rest => {
                                 console.log("index txInfo success")
@@ -820,6 +901,7 @@ function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start:
                     rest.useHashPKr = true
                 }
             }
+            console.log("fetchAndIndex result>>>> ",pkrIndex,useHashPkr,start,end,rest);
             resolve(rest)
         }).catch(reason => {
             reject(reason)
@@ -931,8 +1013,7 @@ async function _checkNil(tk: string) {
                     txInfo.TK = tk;
                     txInfo.Num_TxHash = txInfo.Num + "_" + txInfo.TxHash
 
-                    db.get(tk).delete(tables.txBase.name,{"TxHash_Root_TxType":[txInfo.TxHash,txInfo.TxHash,TxType.out].join("_")}).then(res=>{}).catch(err=>{});
-                    db.get(tk).delete(tables.tx.name,{"Num_TxHash":["99999999999",txInfo.TxHash].join("_")}).then(res=>{}).catch(err=>{});
+                    _deletePending(db.get(tk),txInfo)
 
                     const nilDatas = await db.get(tk).select(tables.nils.name, nil);
                     // @ts-ignore
@@ -953,15 +1034,30 @@ async function _checkNil(tk: string) {
                                         Root: root,
                                         // @ts-ignore
                                         Asset: utxo.Asset,
-                                        TxHash_Root_TxType: [txInfo.TxHash, root, TxType.out].join("_")
+                                        TxHash_Root_TxType: [txInfo.TxHash, root, TxType.out].join("_"),
+                                        Num_TxHash:[txInfo.Num,txInfo.TxHash].join("_"),
                                     }
                                     await db.get(tk).update(tables.txBase.name, txBase)
                                     const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
-                                    const assets = await db.get(tk).select(tables.assets.name,{Currency:currency});
+                                    const assets = await db.get(tk).select(tables.assets.name, {Currency: currency});
 
-                                    await changeAssets(assets, utxo, db.get(tk),TxType.out);
+                                    await changeAssets(assets, utxo, db.get(tk), TxType.out);
                                     await db.get(tk).delete(tables.utxo.name, {Root: root})
 
+                                    if(utxo.Asset && utxo.Asset.Tkn){
+                                        const cy = utils.hexToCy(utxo.Asset.Tkn.Currency);
+                                        const txCurrency : TxCurrency = {
+                                            Num:txInfo.Num,
+                                            TxHash:txInfo.TxHash,
+                                            Currency:utils.hexToCy(utxo.Asset.Tkn.Currency),
+                                            id:[txInfo.Num,txInfo.TxHash,cy].join("_"),
+                                        }
+                                        db.get(tk).update(tables.txCurrency.name,txCurrency).then(rest => {
+                                            console.log("index txCurrency success")
+                                        }).catch(err => {
+                                            console.log(err)
+                                        });
+                                    }
                                 }
                             }
                         }

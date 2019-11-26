@@ -26,15 +26,45 @@ const txTable: DatabaseTable = {
         {
             index: "TxHash",
             relativeIndex: "TxHash",
-            unique: true
+            unique: false
         },
         {
             index: "Num_TxHash",
             relativeIndex: "Num_TxHash",
+            unique: true
+        },
+        {
+            index: "Num",
+            relativeIndex: "Num",
             unique: false
         }
     ]
 }
+
+
+const txCurrencyTable: DatabaseTable = {
+    name: "tx_currency",
+    keyPath: "id",
+    autoIncrement: false,
+    indexes: [
+        {
+            index: "TxHash",
+            relativeIndex: "TxHash",
+            unique: false
+        },
+        {
+            index: "Currency",
+            relativeIndex: "Currency",
+            unique: false
+        },
+        {
+            index: "Num",
+            relativeIndex: "Num",
+            unique: false
+        }
+    ]
+}
+
 
 const txBaseTable: DatabaseTable = {
     name: "tx_base",
@@ -44,6 +74,11 @@ const txBaseTable: DatabaseTable = {
         {
             index: "TxHash",
             relativeIndex: "TxHash",
+            unique: false
+        },
+        {
+            index: "Num_TxHash",
+            relativeIndex: "Num_TxHash",
             unique: false
         },
         {
@@ -120,7 +155,8 @@ const dbConfig: Database = {
         syncInfoTable,
         txBaseTable,
         assetsInfoTable,
-        assetsUtxoTable
+        assetsUtxoTable,
+        txCurrencyTable,
     ],
     version: 1
 }
@@ -133,6 +169,7 @@ const tables = {
     syncInfo: syncInfoTable,
     assets:assetsInfoTable,
     assetUtxo:assetsUtxoTable,
+    txCurrency:txCurrencyTable,
 }
 
 
@@ -160,6 +197,7 @@ export interface TxBase {
     TxType: TxType
     Root: string
     TxHash_Root_TxType: string
+    Num_TxHash:string
     Asset: any
 }
 
@@ -182,6 +220,13 @@ export interface AssetsInfo {
     Currency: string
     Amount: string
     Frozen?: string
+}
+
+export interface TxCurrency {
+    id:string,
+    Num: number
+    TxHash: string
+    Currency:string
 }
 
 

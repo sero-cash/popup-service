@@ -61,24 +61,31 @@ export class Table {
     }
 
     // some
-    some(index: any, start: any, end: any) {
+    some(selector: any, count: any) {
+        let index: any
+        let indexValue: any
+        for (let name in selector) {
+            index = name;
+            indexValue = selector[name]
+        }
+        console.log("some>>>>>",selector,count);
         return new Promise((resolve, reject) => {
             const temp: any = [];
             const cursor = this.request().index(index);
             // const range = IDBKeyRange.lowerBound("_")
-            cursor.openCursor(null,"prev").onsuccess = (ev: any) => {
+            cursor.openCursor(indexValue,"prev").onsuccess = (ev: any) => {
                 const res = ev.target.result;
+                console.log("res>>>>>",res);
                 if (res) {
                     temp.push(res.value)
-                    if(temp.length<=end){
+                    if(temp.length<count){
                         res.continue()
+                    }else{
+                        resolve(temp)
                     }
                 } else {
                     resolve(temp)
                 }
-            }
-            cursor.openCursor(null,"prev").onerror = (ev: any) => {
-                reject(ev)
             }
         })
     }
