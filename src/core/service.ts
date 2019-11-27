@@ -219,11 +219,8 @@ async function _commitTx(tx: Tx): Promise<string | null> {
 
 
 class TxGenerator {
-
     async findRoots(accountKey: string, currency: string, remain: BN): Promise<{ utxos: Array<utxo>; remain: BN }> {
-        console.log("findRoots::", accountKey, currency, remain);
         const utxoAll: Array<utxo> = <Array<utxo>>await db.get(accountKey).select(tables.utxo.name, {TK: accountKey})
-        console.log("utxoAll::", utxoAll);
         return new Promise<{ utxos: Array<utxo>, remain: BN }>(resolve => {
             let utxos = new Array<utxo>();
             for (let utxo of utxoAll) {
@@ -605,28 +602,30 @@ function init(message: Message) {
         console.log("rpc: ", rpc, "syncTime: ", syncTime)
     }
 
-    if (!syncIntervalId) {
-        _startSync();
+    if (syncIntervalId) {
+       clearInterval(syncIntervalId)
     }
+    isSyncing=false;
+    _startSync();
 
-    // if (!db) {
-    //     db = new PopDB(dbConfig)
-    // }
     message.data = "success"
     _postMessage(message)
+
 }
 
 function _postMessage(message: Message): void {
-    console.log("popservice response >>>>>>", message);
+    console.log("popservice response >>>>>>", JSON.stringify(message));
     // @ts-ignore
     self.postMessage(message)
 }
 
 function _startSync(): void {
+
     syncIntervalId = setInterval(function () {
         try {
+            console.log("======= start sync data,isSyncing=",isSyncing);
+
             if (isSyncing === false) {
-                console.log("======= start sync data,isSyncing=",isSyncing);
                 if (db) {
                     db.forEach(function (_db) {
                         isSyncing = true
