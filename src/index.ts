@@ -15,7 +15,7 @@ class PopupService {
             let msg = event.data;
             let cb = that.callbackHandler.get(msg.messageId);
 
-            console.log("popservice send msg >>>>>>>> ", JSON.stringify(msg))
+            // console.log("popservice send msg >>>>>>>> ", JSON.stringify(msg))
             that.callbackHandler.delete(msg.messageId);
             if (cb && typeof cb === "function") {
                 cb(msg);

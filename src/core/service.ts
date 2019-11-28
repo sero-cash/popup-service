@@ -614,42 +614,44 @@ function init(message: Message) {
 }
 
 function _postMessage(message: Message): void {
-    console.log("popservice response >>>>>>", JSON.stringify(message));
+    // console.log("popservice response >>>>>>", JSON.stringify(message));
     // @ts-ignore
     self.postMessage(message)
 }
 
 function _startSync(): void {
-
     syncIntervalId = setInterval(function () {
-        try {
-            console.log("======= start sync data,isSyncing=",isSyncing);
-
-            if (isSyncing === false) {
-                if (db) {
-                    db.forEach(function (_db) {
-                        isSyncing = true
-                        _fetchOuts(_db).then(rest => {
-                            console.log("_fetchOuts rest ===> ", rest)
-                            isSyncing = false
-                        }).catch(error => {
-                            // _setLatestSyncTime();
-                            isSyncing = false;
-                            console.log("_fetchOuts error ===> ", error)
-                            throw new Error(error)
-                        });
-                    })
-                }
-            } else {
-                console.log("======= syncing data....")
-            }
-            _setLatestSyncTime();
-        } catch (e) {
-            console.log("sync data error:", e.message)
+        console.log("======= start sync data,isSyncing=",isSyncing);
+        if(!isSyncing){
+            fetchHandler().then(flag=>{
+                console.log("======= fetchHandler flag>>> ",flag);
+            }).catch(error=>{
+                console.log("======= fetchHandler error>>> ",error);
+                isSyncing = false;
+            })
+            console.log("======= end sync data",isSyncing);
         }
+        _setLatestSyncTime();
     }, syncTime)
-
 }
+
+async function fetchHandler(){
+    let dbEntries = db.entries();
+    let dbRes = dbEntries.next();
+    isSyncing = true;
+    console.log("======= set isSyncing begin",isSyncing);
+    while (!dbRes.done) {
+        let _db = dbRes.value[1]
+        await _fetchOuts(_db)
+        dbRes = dbEntries.next();
+    }
+    isSyncing = false;
+    console.log("======= set isSyncing end ",isSyncing);
+    return new Promise(function (resolve) {
+        resolve(isSyncing)
+    })
+}
+
 
 async function changeAssets(assets, utxo, db: PopDB, txType: TxType) {
 
