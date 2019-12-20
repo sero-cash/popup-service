@@ -20,8 +20,6 @@ let isSyncing = false;
 let syncTime: number = 10 * 1000;
 let rpc = null;
 
-let times = 0 ;
-
 let rpcId = 0;
 
 const operations = {
@@ -41,7 +39,7 @@ const operations = {
 
 
 self.addEventListener('message', e => {
-    console.log("popservice receive data: ", e.data);
+    // console.log("popservice receive data: ", e.data);
     if (e.data && e.data.method) {
         if (operations[e.data.method]) {
             operations[e.data.method](e.data)
@@ -66,13 +64,13 @@ function getSeroPrice(message: Message) {
 
 function commitTx(message: Message) {
     const tx: Tx = message.data
-    console.log("commitTx >>> ", message, tx)
+    // console.log("commitTx >>> ", message, tx)
     _commitTx(tx).then(hash => {
-        console.log("_commitTx hash:", hash)
+        // console.log("_commitTx hash:", hash)
         message.data = hash;
         _postMessage(message)
     }).catch(err => {
-        console.log("_commitTx err:", err)
+        // console.log("_commitTx err:", err)
         message.error = err;
         _postMessage(message)
     })
@@ -186,14 +184,14 @@ async function _commitTx(tx: Tx): Promise<string | null> {
         const acInfo: SyncInfo = <SyncInfo> await _db.selectId(tables.syncInfo.name, 1)
 
         const preTxParam = _genPrePramas(tx, acInfo);
-        console.log("tx >>> preTxParam: ", preTxParam, JSON.stringify(preTxParam));
+        // console.log("tx >>> preTxParam: ", preTxParam, JSON.stringify(preTxParam));
         const rest = await genTxParam(preTxParam, new TxGenerator(), new TxState());
         rest.Z = false;
         const signRet = signTx(tx.SK, rest)
-        console.log("tx >>> rest: ", rest, JSON.stringify(rest));
-        console.log("tx >>> signRet: ", signRet, JSON.stringify(signRet));
+        // console.log("tx >>> rest: ", rest, JSON.stringify(rest));
+        // console.log("tx >>> signRet: ", signRet, JSON.stringify(signRet));
         const resp = await jsonRpcReq('sero_commitTx', [signRet])
-        console.log("tx >>> resp: ", resp);
+        // console.log("tx >>> resp: ", resp);
 
         return new Promise<string | null>((resolve, reject) => {
             // @ts-ignore
@@ -219,6 +217,7 @@ async function _commitTx(tx: Tx): Promise<string | null> {
 
 
 class TxGenerator {
+
     async findRoots(accountKey: string, currency: string, remain: BN): Promise<{ utxos: Array<utxo>; remain: BN }> {
         const utxoAll: Array<utxo> = <Array<utxo>>await db.get(accountKey).select(tables.utxo.name, {TK: accountKey})
         return new Promise<{ utxos: Array<utxo>, remain: BN }>(resolve => {
@@ -227,6 +226,15 @@ class TxGenerator {
                 if (utxo.Asset && utxo.Asset.Tkn) {
                     let tkn = utxo.Asset.Tkn;
                     if (hexToCy(tkn.Currency) === currency) {
+                        const now = new Date().getTime();
+                        const latest = utxo["timestamp"];
+                        if(latest && now-latest<12*15*1000){
+                            continue
+                        }
+                        //set utxo has used
+                        utxo["timestamp"] = now;
+                        db.get(accountKey).update(tables.utxo.name,utxo)
+
                         utxos.push(utxo)
                         let amount = utils.toBN(tkn.Value);
                         remain = remain.sub(amount);
@@ -411,7 +419,7 @@ async function _getTxList(message: Message) {
     }
     return new Promise(resolve => {
         function compare(o1:any,o2:any){
-            return o1.Num-o2.Num;
+            return o1.Time-o2.Time;
         }
         txList.sort(compare)
         resolve(txList);
@@ -456,7 +464,7 @@ function initAccount(message: Message) {
             db.set(tk, newDb)
 
             newDb.select(tables.syncInfo.name, {TK: tk}).then(rest => {
-                console.log("initAccount rest: ", rest)
+                // console.log("initAccount rest: ", rest)
                 // @ts-ignore
                 if (!rest || rest.length === 0) {
                     let data: SyncInfo = {
@@ -595,11 +603,11 @@ export interface initParam {
 
 function init(message: Message) {
     let initParam = message.data;
-    console.log("init sync component ! ")
+    // console.log("init sync component ! ")
     if (initParam.rpc && initParam.syncTime) {
         rpc = initParam.rpc
         syncTime = initParam.syncTime
-        console.log("rpc: ", rpc, "syncTime: ", syncTime)
+        // console.log("rpc: ", rpc, "syncTime: ", syncTime)
     }
 
     if (syncIntervalId) {
@@ -621,15 +629,15 @@ function _postMessage(message: Message): void {
 
 function _startSync(): void {
     syncIntervalId = setInterval(function () {
-        console.log("======= start sync data,isSyncing=",isSyncing);
+        // console.log("======= start sync data,isSyncing=",isSyncing);
         if(!isSyncing){
             fetchHandler().then(flag=>{
-                console.log("======= fetchHandler flag>>> ",flag);
+                // console.log("======= fetchHandler flag>>> ",flag);
             }).catch(error=>{
-                console.log("======= fetchHandler error>>> ",error);
+                // console.log("======= fetchHandler error>>> ",error);
                 isSyncing = false;
             })
-            console.log("======= end sync data",isSyncing);
+            // console.log("======= end sync data",isSyncing);
         }
         _setLatestSyncTime();
     }, syncTime)
@@ -639,14 +647,14 @@ async function fetchHandler(){
     let dbEntries = db.entries();
     let dbRes = dbEntries.next();
     isSyncing = true;
-    console.log("======= set isSyncing begin",isSyncing);
+    // console.log("======= set isSyncing begin",isSyncing);
     while (!dbRes.done) {
         let _db = dbRes.value[1]
         await _fetchOuts(_db)
         dbRes = dbEntries.next();
     }
     isSyncing = false;
-    console.log("======= set isSyncing end ",isSyncing);
+    // console.log("======= set isSyncing end ",isSyncing);
     return new Promise(function (resolve) {
         resolve(isSyncing)
     })
@@ -796,7 +804,7 @@ async function _fetchOuts(db: PopDB) {
 }
 
 function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start: number, end: any): Promise<fetchRest> {
-    console.log("fetchAndIndex>>>> ",pkrIndex,useHashPkr,start,end);
+    // console.log("fetchAndIndex>>>> ",pkrIndex,useHashPkr,start,end);
     return new Promise((resolve, reject) => {
         const pkrRest = genPKrs(tk, pkrIndex, useHashPkr);
         let param = [];
@@ -902,7 +910,7 @@ function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start:
                     rest.useHashPKr = true
                 }
             }
-            console.log("fetchAndIndex result>>>> ",pkrIndex,useHashPkr,start,end,rest);
+            // console.log("fetchAndIndex result>>>> ",pkrIndex,useHashPkr,start,end,rest);
             resolve(rest)
         }).catch(reason => {
             reject(reason)
@@ -1014,7 +1022,7 @@ async function _checkNil(tk: string) {
                     txInfo.TK = tk;
                     txInfo.Num_TxHash = txInfo.Num + "_" + txInfo.TxHash
 
-                    _deletePending(db.get(tk),txInfo)
+                    _deletePending(db.get(tk),txInfo);
 
                     const nilDatas = await db.get(tk).select(tables.nils.name, nil);
                     // @ts-ignore

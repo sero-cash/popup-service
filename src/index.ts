@@ -1,6 +1,7 @@
-import {assetsWorker} from './worker/assets'
 import {initParam} from "./core/service";
 import {Message, Method, Tx} from "./core/types";
+
+const assetsWorker = new Worker('./core/service.js', {type: 'module'});
 
 class PopupService {
 
@@ -58,7 +59,7 @@ class PopupService {
     commitTx(tx: Tx, cb: any) {
 
         let message: Message = {method: Method.CommitTx, data: tx}
-        console.log("commitTx message", message)
+        // console.log("commitTx message", message)
         this.handlerMsg(message, cb);
     }
 

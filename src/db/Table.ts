@@ -68,14 +68,14 @@ export class Table {
             index = name;
             indexValue = selector[name]
         }
-        console.log("some>>>>>",selector,count);
+        // console.log("some>>>>>",selector,count);
         return new Promise((resolve, reject) => {
             const temp: any = [];
             const cursor = this.request().index(index);
             // const range = IDBKeyRange.lowerBound("_")
             cursor.openCursor(indexValue,"prev").onsuccess = (ev: any) => {
                 const res = ev.target.result;
-                console.log("res>>>>>",res);
+                // console.log("res>>>>>",res);
                 if (res) {
                     temp.push(res.value)
                     if(temp.length<count){

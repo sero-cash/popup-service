@@ -147,7 +147,7 @@ export class PopDB {
     }
 
     delete(name: string, data: any) {
-        console.log("delete >>>> ",name,data);
+        // console.log("delete >>>> ",name,data);
         return new Promise((resolve, reject) => {
             this.connect().then((db: IDBDatabase) => {
                 const table = new Table(name, db)
