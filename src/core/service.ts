@@ -65,15 +65,21 @@ function getSeroPrice(message: Message) {
 function commitTx(message: Message) {
     const tx: Tx = message.data
     // console.log("commitTx >>> ", message, tx)
-    _commitTx(tx).then(hash => {
-        // console.log("_commitTx hash:", hash)
-        message.data = hash;
+    try{
+        _commitTx(tx).then(hash => {
+            // console.log("_commitTx hash:", hash)
+            message.data = hash;
+            _postMessage(message)
+        }).catch(err => {
+            // console.log("_commitTx err:", err)
+            message.error = err;
+            _postMessage(message)
+        })
+    }catch (e) {
+        message.error = e.message;
         _postMessage(message)
-    }).catch(err => {
-        // console.log("_commitTx err:", err)
-        message.error = err;
-        _postMessage(message)
-    })
+    }
+
 }
 
 function _genPrePramas(tx: Tx, acInfo: SyncInfo) {

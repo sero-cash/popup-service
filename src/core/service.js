@@ -88,15 +88,21 @@ function getSeroPrice(message) {
 function commitTx(message) {
     var tx = message.data;
     // console.log("commitTx >>> ", message, tx)
-    _commitTx(tx).then(function (hash) {
-        // console.log("_commitTx hash:", hash)
-        message.data = hash;
+    try {
+        _commitTx(tx).then(function (hash) {
+            // console.log("_commitTx hash:", hash)
+            message.data = hash;
+            _postMessage(message);
+        }).catch(function (err) {
+            // console.log("_commitTx err:", err)
+            message.error = err;
+            _postMessage(message);
+        });
+    }
+    catch (e) {
+        message.error = e.message;
         _postMessage(message);
-    }).catch(function (err) {
-        // console.log("_commitTx err:", err)
-        message.error = err;
-        _postMessage(message);
-    });
+    }
 }
 function _genPrePramas(tx, acInfo) {
     var From = tx.From, To = tx.To, Value = tx.Value, Cy = tx.Cy, Data = tx.Data, Gas = tx.Gas, GasPrice = tx.GasPrice;
