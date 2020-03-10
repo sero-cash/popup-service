@@ -1,11 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var types_1 = require("./core/types");
-var assetsWorker = new Worker('./core/service.js', { type: 'module' });
+var assetsWorker;
 var PopupService = /** @class */ (function () {
     function PopupService() {
         this.callbackHandler = new Map();
         this.messageId = 0;
+        assetsWorker = new Worker('./core/service.js', { type: 'module' });
         var that = this;
         assetsWorker.onmessage = function (event) {
             var msg = event.data;

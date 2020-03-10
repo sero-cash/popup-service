@@ -1,7 +1,7 @@
 import {initParam} from "./core/service";
 import {Message, Method, Tx} from "./core/types";
 
-const assetsWorker = new Worker('./core/service.js', {type: 'module'});
+let assetsWorker;
 
 class PopupService {
 
@@ -11,6 +11,9 @@ class PopupService {
     constructor() {
         this.callbackHandler = new Map<number, any>();
         this.messageId = 0;
+
+        assetsWorker = new Worker('./core/service.js', {type: 'module'});
+
         let that = this;
         assetsWorker.onmessage = function (event) {
             let msg = event.data;
