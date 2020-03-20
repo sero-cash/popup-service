@@ -12,6 +12,7 @@ class PopupService {
         this.callbackHandler = new Map<number, any>();
         this.messageId = 0;
 
+        // @ts-ignore
         assetsWorker = new Worker('./core/service.js', {type: 'module'});
 
         let that = this;
@@ -71,13 +72,13 @@ class PopupService {
         this.handlerMsg(message, cb)
     }
 
-    clearData( cb: any) {
-        let message: Message = {method: Method.ClearData, data: null}
+    clearData(tk: string, cb: any) {
+        let message: Message = {method: Method.ClearData, data: tk}
         this.handlerMsg(message, cb)
     }
 
-    getSyncState(cb: any){
-        let message: Message = {method: Method.HealthyCheck, data: null}
+    getSyncState(tk: string,cb: any){
+        let message: Message = {method: Method.HealthyCheck, data: tk}
         this.handlerMsg(message, cb)
     }
 

@@ -15,6 +15,7 @@ import {Asset, Token, Witness, ZPkg} from "jsuperzk/dist/types/types";
 let db: Map<string, PopDB> = new Map<string, PopDB>();
 
 let latestSyncTime = new Date().getTime();
+let latestBlock = 0;
 let syncIntervalId = null;
 let isSyncing = false;
 let syncTime: number = 10 * 1000;
@@ -39,7 +40,6 @@ const operations = {
 
 
 self.addEventListener('message', e => {
-    // console.log("popservice receive data: ", e.data);
     if (e.data && e.data.method) {
         if (operations[e.data.method]) {
             operations[e.data.method](e.data)
@@ -65,7 +65,7 @@ function getSeroPrice(message: Message) {
 function commitTx(message: Message) {
     const tx: Tx = message.data
     // console.log("commitTx >>> ", message, tx)
-    try{
+    try {
         _commitTx(tx).then(hash => {
             // console.log("_commitTx hash:", hash)
             message.data = hash;
@@ -75,7 +75,7 @@ function commitTx(message: Message) {
             message.error = err;
             _postMessage(message)
         })
-    }catch (e) {
+    } catch (e) {
         message.error = e.message;
         _postMessage(message)
     }
@@ -163,18 +163,18 @@ async function _storePending(tk, signRet, tx: Tx, _db) {
         TxType: TxType.out,
         Root: signRet.Hash,
         TxHash_Root_TxType: [signRet.Hash, signRet.Hash, TxType.out].join("_"),
-        Num_TxHash:[txInfo.Num,signRet.Hash].join("_"),
+        Num_TxHash: [txInfo.Num, signRet.Hash].join("_"),
         Asset: asset
     }
     await _db.update(tables.txBase.name, txBase)
 
-    const txCurrency : TxCurrency = {
-        Num:txInfo.Num,
-        TxHash:txInfo.TxHash,
-        Currency:tx.Cy,
-        id:[txInfo.Num,txInfo.TxHash,tx.Cy].join("_"),
+    const txCurrency: TxCurrency = {
+        Num: txInfo.Num,
+        TxHash: txInfo.TxHash,
+        Currency: tx.Cy,
+        id: [txInfo.Num, txInfo.TxHash, tx.Cy].join("_"),
     }
-    await db.get(tk).update(tables.txCurrency.name,txCurrency)
+    await db.get(tk).update(tables.txCurrency.name, txCurrency)
 }
 
 async function _commitTx(tx: Tx): Promise<string | null> {
@@ -185,13 +185,13 @@ async function _commitTx(tx: Tx): Promise<string | null> {
             reject("Account is invalid! ")
         })
 
-    }else{
+    } else {
         const _db = db.get(tk);
-        const acInfo: SyncInfo = <SyncInfo> await _db.selectId(tables.syncInfo.name, 1)
+        const acInfo: SyncInfo = <SyncInfo>await _db.selectId(tables.syncInfo.name, 1)
 
-        const preTxParam = _genPrePramas(tx, acInfo);
-        // console.log("tx >>> preTxParam: ", preTxParam, JSON.stringify(preTxParam));
-        const rest = await genTxParam(preTxParam, new TxGenerator(), new TxState());
+        let preTxParam = _genPrePramas(tx, acInfo);
+        let rest = await genTxParam(preTxParam, new TxGenerator(), new TxState());
+
         rest.Z = false;
         const signRet = signTx(tx.SK, rest)
         // console.log("tx >>> rest: ", rest, JSON.stringify(rest));
@@ -234,12 +234,12 @@ class TxGenerator {
                     if (hexToCy(tkn.Currency) === currency) {
                         const now = new Date().getTime();
                         const latest = utxo["timestamp"];
-                        if(latest && now-latest<12*15*1000){
+                        if (latest && now - latest < 12 * 15 * 1000) {
                             continue
                         }
                         //set utxo has used
                         utxo["timestamp"] = now;
-                        db.get(accountKey).update(tables.utxo.name,utxo)
+                        db.get(accountKey).update(tables.utxo.name, utxo)
 
                         utxos.push(utxo)
                         let amount = utils.toBN(tkn.Value);
@@ -323,14 +323,21 @@ function getPKrIndex(message: Message) {
 
 // === message
 function healthyCheck(message: Message) {
+    let health = false;
     if (!latestSyncTime) {
-        message.data = {health: false,latestSyncTime:latestSyncTime, isSyncing: isSyncing}
-        _postMessage(message)
     } else {
         const now = new Date().getTime();
-        message.data = {health: (now - latestSyncTime) < 60 * 1000,latestSyncTime:latestSyncTime, isSyncing: isSyncing}
-        _postMessage(message)
+        health = (now - latestSyncTime) < 60 * 1000
     }
+    const tk:string = message.data;
+    db.get(tk).selectId(tables.syncInfo.name, 1).then((info: SyncInfo)=>{
+        message.data = {health: health, latestSyncTime: latestSyncTime, isSyncing: isSyncing, latestBlock: info.CurrentBlock,pkrIndex:info.PkrIndex}
+        _postMessage(message)
+    }).catch(error=>{
+        message.data = {health: health, latestSyncTime: latestSyncTime, isSyncing: isSyncing, latestBlock: 0,pkrIndex:1}
+        _postMessage(message)
+    })
+
 }
 
 function getTxList(message: Message) {
@@ -407,15 +414,15 @@ async function _getTxList(message: Message) {
         count = data.count;
     }
 
-    const rest: any = await db.get(tk).some(tables.txCurrency.name,{Currency:data.cy}, count)
+    const rest: any = await db.get(tk).some(tables.txCurrency.name, {Currency: data.cy}, count)
     let txList = [];
     if (rest && rest.length > 0) {
-        for(let i=rest.length-1;i>=0;i--){
-            let txCurrency= rest[i];
-            let txInfos:any = await db.get(tk).select(tables.tx.name,{"Num_TxHash":[txCurrency.Num,txCurrency.TxHash].join("_")})
-            if(txInfos && txInfos.length>0) {
+        for (let i = rest.length - 1; i >= 0; i--) {
+            let txCurrency = rest[i];
+            let txInfos: any = await db.get(tk).select(tables.tx.name, {"Num_TxHash": [txCurrency.Num, txCurrency.TxHash].join("_")})
+            if (txInfos && txInfos.length > 0) {
                 const txInfo = txInfos[0]
-                const txBases = await db.get(tk).select(tables.txBase.name, {"Num_TxHash": [txCurrency.Num,txInfo.TxHash].join("_")});
+                const txBases = await db.get(tk).select(tables.txBase.name, {"Num_TxHash": [txCurrency.Num, txInfo.TxHash].join("_")});
                 let txDetail: any = await _genTxInfo(txBases, txInfo, data.cy);
                 if (txDetail.Tkn && txDetail.Tkn.size > 0 || txDetail.Tkt && txDetail.Tkt.size > 0) {
                     txList.push(txDetail)
@@ -424,9 +431,10 @@ async function _getTxList(message: Message) {
         }
     }
     return new Promise(resolve => {
-        function compare(o1:any,o2:any){
-            return o1.Time-o2.Time;
+        function compare(o1: any, o2: any) {
+            return o1.Time - o2.Time;
         }
+
         txList.sort(compare)
         resolve(txList);
     })
@@ -447,8 +455,8 @@ function getTxDetail(message: Message) {
 }
 
 async function _getTxBase(tk, hash: string) {
-    const txInfo = await db.get(tk).select(tables.tx.name, {TxHash:hash});
-    const txBases = await db.get(tk).select(tables.txBase.name, {TxHash:hash});
+    const txInfo = await db.get(tk).select(tables.tx.name, {TxHash: hash});
+    const txBases = await db.get(tk).select(tables.txBase.name, {TxHash: hash});
     return await _genTxInfo(txBases, txInfo[0]);
 }
 
@@ -515,7 +523,7 @@ function initAccount(message: Message) {
 }
 
 function clearData(message: Message) {
-    _clearData().then(data => {
+    _clearData(message.data).then(data => {
         isSyncing = false;
         message.data = "Success"
         _postMessage(message)
@@ -526,37 +534,45 @@ function clearData(message: Message) {
     })
 }
 
-async function _clearData() {
+async function _clearData(tk:string) {
     if (isSyncing === false) {
         isSyncing = true;
-        let dbEntries = db.entries();
-        let dbRes = dbEntries.next();
-        while (!dbRes.done) {
-            let _db = dbRes.value[1]
-            await _db.clearTable(tables.utxo.name)
-            await _db.clearTable(tables.txBase.name)
-            await _db.clearTable(tables.assets.name)
-            await _db.clearTable(tables.assetUtxo.name)
-            await _db.clearTable(tables.tx.name)
-            await _db.clearTable(tables.nils.name)
-            await _db.clearTable(tables.txCurrency.name)
-
-            const info: SyncInfo = <SyncInfo>await _db.selectId(tables.syncInfo.name, 1)
-            info.CurrentBlock = 0;
-            info.PKr = info.MainPKr;
-            info.PkrIndex = 1;
-            info.UseHashPKr = false;
-            await _db.update(tables.syncInfo.name, info)
-
-            dbRes = dbEntries.next()
+        if(tk){
+            await _clear(db.get(tk))
+        }else{
+            let dbEntries = db.entries();
+            let dbRes = dbEntries.next();
+            while (!dbRes.done) {
+                let _db = dbRes.value[1]
+                await _clear(_db)
+                dbRes = dbEntries.next()
+            }
         }
+
         return new Promise(function (resolve) {
             resolve("Data clear success!")
         })
-    }else{
+    } else {
         return new Promise(function (resolve, reject) {
             reject("Data synchronization...")
         })
+    }
+
+    async function _clear(_db:PopDB) {
+        await _db.clearTable(tables.utxo.name)
+        await _db.clearTable(tables.txBase.name)
+        await _db.clearTable(tables.assets.name)
+        await _db.clearTable(tables.assetUtxo.name)
+        await _db.clearTable(tables.tx.name)
+        await _db.clearTable(tables.nils.name)
+        await _db.clearTable(tables.txCurrency.name)
+
+        const info: SyncInfo = <SyncInfo>await _db.selectId(tables.syncInfo.name, 1)
+        info.CurrentBlock = 0;
+        info.PKr = info.MainPKr;
+        info.PkrIndex = 1;
+        info.UseHashPKr = false;
+        await _db.update(tables.syncInfo.name, info)
     }
 }
 
@@ -570,12 +586,12 @@ function balancesOf(message: Message) {
         return
     }
 
-    if(db.get(tk)){
+    if (db.get(tk)) {
         _getBalance();
-    }else{
+    } else {
         setTimeout(function () {
             _getBalance();
-        },1000)
+        }, 1000)
     }
 
     function _getBalance() {
@@ -617,9 +633,9 @@ function init(message: Message) {
     }
 
     if (syncIntervalId) {
-       clearInterval(syncIntervalId)
+        clearInterval(syncIntervalId)
     }
-    isSyncing=false;
+    isSyncing = false;
     _startSync();
 
     message.data = "success"
@@ -634,22 +650,27 @@ function _postMessage(message: Message): void {
 }
 
 function _startSync(): void {
+    _inner()
     syncIntervalId = setInterval(function () {
         // console.log("======= start sync data,isSyncing=",isSyncing);
-        if(!isSyncing){
-            fetchHandler().then(flag=>{
+        _inner()
+    }, syncTime)
+
+    function _inner() {
+        if (!isSyncing) {
+            fetchHandler().then(flag => {
                 // console.log("======= fetchHandler flag>>> ",flag);
-            }).catch(error=>{
+            }).catch(error => {
                 // console.log("======= fetchHandler error>>> ",error);
                 isSyncing = false;
             })
             // console.log("======= end sync data",isSyncing);
         }
         _setLatestSyncTime();
-    }, syncTime)
+    }
 }
 
-async function fetchHandler(){
+async function fetchHandler() {
     let dbEntries = db.entries();
     let dbRes = dbEntries.next();
     isSyncing = true;
@@ -716,7 +737,7 @@ async function changeAssets(assets, utxo, db: PopDB, txType: TxType) {
 }
 
 function _deletePending(db: PopDB, txData) {
-    db.select(tables.tx.name, {"Num_TxHash": ["99999999999", txData.TxHash].join("_")}).then((pendingTxs:any)=>{
+    db.select(tables.tx.name, {"Num_TxHash": ["99999999999", txData.TxHash].join("_")}).then((pendingTxs: any) => {
         if (pendingTxs && pendingTxs.length > 0) {
             db.delete(tables.txBase.name, {"TxHash_Root_TxType": [txData.TxHash, txData.TxHash, TxType.out].join("_")}).then(res => {
             }).catch(err => {
@@ -731,7 +752,7 @@ function _deletePending(db: PopDB, txData) {
                 console.log(err.message);
             });
         }
-    }).catch(err=>{
+    }).catch(err => {
         console.log(err.message);
     })
 }
@@ -749,7 +770,6 @@ async function _fetchOuts(db: PopDB) {
         let end = null;
 
         while (true) {
-
             if (!info.CurrentBlock || info.CurrentBlock === 0) {
             } else {
                 start = info.CurrentBlock;
@@ -799,6 +819,7 @@ async function _fetchOuts(db: PopDB) {
                 end = rtn.lastBlockNumber
             } else {
                 syncInfo.CurrentBlock = rtn.lastBlockNumber + 1;
+                latestBlock = rtn.lastBlockNumber;
                 break
             }
         }
@@ -814,7 +835,7 @@ function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start:
     return new Promise((resolve, reject) => {
         const pkrRest = genPKrs(tk, pkrIndex, useHashPkr);
         let param = [];
-        if (end && end>0) {
+        if (end && end > 0) {
             let currentPkr = []
             pkrRest.CurrentPKrMap.forEach(((value, key) => {
                 currentPkr.push(key)
@@ -860,20 +881,20 @@ function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start:
                                 Root: blockData.Out.Root,
                                 Asset: utxos[0].Asset,
                                 TxHash_Root_TxType: [txInfo.TxHash, txInfo.Root, TxType.in].join("_"),
-                                Num_TxHash:[txInfo.Num,txInfo.TxHash].join("_"),
+                                Num_TxHash: [txInfo.Num, txInfo.TxHash].join("_"),
                             }
 
                             txInfos.push(txInfo);
 
-                            if(utxos[0].Asset && utxos[0].Asset.Tkn){
+                            if (utxos[0].Asset && utxos[0].Asset.Tkn) {
                                 const cy = utils.hexToCy(utxos[0].Asset.Tkn.Currency);
-                                const txCurrency : TxCurrency = {
-                                    Num:txInfo.Num,
-                                    TxHash:txInfo.TxHash,
-                                    Currency:cy,
-                                    id:[txInfo.Num,txInfo.TxHash,cy].join("_"),
+                                const txCurrency: TxCurrency = {
+                                    Num: txInfo.Num,
+                                    TxHash: txInfo.TxHash,
+                                    Currency: cy,
+                                    id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
                                 }
-                                db.get(tk).update(tables.txCurrency.name,txCurrency).then(rest => {
+                                db.get(tk).update(tables.txCurrency.name, txCurrency).then(rest => {
                                     console.log("index txCurrency success")
                                 }).catch(err => {
                                     console.log(err)
@@ -946,6 +967,7 @@ function jsonRpcReq(_method: string, params: any) {
             method: _method,
             params: params
         };
+
         return axios.post(rpc, data).then(response => {
             resolve(response)
         }).catch(e => {
@@ -1010,12 +1032,20 @@ enum PKrType {
 
 async function _checkNil(tk: string) {
     const nils = await db.get(tk).selectAll(tables.nils.name)
-    let nilArr = new Array()
+    let nilArr = new Array<any>()
     // @ts-ignore
     for (let nil of nils) {
         nilArr.push(nil.Nil)
+        if (nilArr.length >= 100) {
+            await _innerCheckNil(nilArr)
+            nilArr = new Array<any>()
+        }
     }
     if (nilArr && nilArr.length > 0) {
+        await _innerCheckNil(nilArr)
+    }
+
+    async function _innerCheckNil(nilArr) {
         const resp = await jsonRpcReq('light_checkNil', [nilArr])
         // @ts-ignore
         if (resp && resp.data && resp.data.result) {
@@ -1028,7 +1058,7 @@ async function _checkNil(tk: string) {
                     txInfo.TK = tk;
                     txInfo.Num_TxHash = txInfo.Num + "_" + txInfo.TxHash
 
-                    _deletePending(db.get(tk),txInfo);
+                    _deletePending(db.get(tk), txInfo);
 
                     const nilDatas = await db.get(tk).select(tables.nils.name, nil);
                     // @ts-ignore
@@ -1050,7 +1080,7 @@ async function _checkNil(tk: string) {
                                         // @ts-ignore
                                         Asset: utxo.Asset,
                                         TxHash_Root_TxType: [txInfo.TxHash, root, TxType.out].join("_"),
-                                        Num_TxHash:[txInfo.Num,txInfo.TxHash].join("_"),
+                                        Num_TxHash: [txInfo.Num, txInfo.TxHash].join("_"),
                                     }
                                     await db.get(tk).update(tables.txBase.name, txBase)
                                     const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
@@ -1059,15 +1089,15 @@ async function _checkNil(tk: string) {
                                     await changeAssets(assets, utxo, db.get(tk), TxType.out);
                                     await db.get(tk).delete(tables.utxo.name, {Root: root})
 
-                                    if(utxo.Asset && utxo.Asset.Tkn){
+                                    if (utxo.Asset && utxo.Asset.Tkn) {
                                         const cy = utils.hexToCy(utxo.Asset.Tkn.Currency);
-                                        const txCurrency : TxCurrency = {
-                                            Num:txInfo.Num,
-                                            TxHash:txInfo.TxHash,
-                                            Currency:utils.hexToCy(utxo.Asset.Tkn.Currency),
-                                            id:[txInfo.Num,txInfo.TxHash,cy].join("_"),
+                                        const txCurrency: TxCurrency = {
+                                            Num: txInfo.Num,
+                                            TxHash: txInfo.TxHash,
+                                            Currency: utils.hexToCy(utxo.Asset.Tkn.Currency),
+                                            id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
                                         }
-                                        db.get(tk).update(tables.txCurrency.name,txCurrency).then(rest => {
+                                        db.get(tk).update(tables.txCurrency.name, txCurrency).then(rest => {
                                             console.log("index txCurrency success")
                                         }).catch(err => {
                                             console.log(err)
