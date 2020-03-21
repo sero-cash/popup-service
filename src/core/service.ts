@@ -14,6 +14,9 @@ import {Asset, Token, Witness, ZPkg} from "jsuperzk/dist/types/types";
 
 let db: Map<string, PopDB> = new Map<string, PopDB>();
 
+let assets: Map<string, any> = new Map<string, any>();
+
+
 let latestSyncTime = new Date().getTime();
 let latestBlock = 0;
 let syncIntervalId = null;
@@ -538,8 +541,10 @@ async function _clearData(tk:string) {
     if (isSyncing === false) {
         isSyncing = true;
         if(tk){
+            assets.delete(tk)
             await _clear(db.get(tk))
         }else{
+            assets.clear()
             let dbEntries = db.entries();
             let dbRes = dbEntries.next();
             while (!dbRes.done) {
@@ -586,12 +591,17 @@ function balancesOf(message: Message) {
         return
     }
 
-    if (db.get(tk)) {
-        _getBalance();
-    } else {
-        setTimeout(function () {
+    if(isSyncing){
+        message.data = assets.get(tk)
+        _postMessage(message)
+    }else{
+        if (db.get(tk)) {
             _getBalance();
-        }, 1000)
+        } else {
+            setTimeout(function () {
+                _getBalance();
+            }, 1000)
+        }
     }
 
     function _getBalance() {
@@ -603,6 +613,7 @@ function balancesOf(message: Message) {
                 })
             }
             message.data = TknRet
+            assets.set(tk,TknRet)
             _postMessage(message)
         }).catch(err => {
             message.error = err.message;
@@ -661,7 +672,7 @@ function _startSync(): void {
             fetchHandler().then(flag => {
                 // console.log("======= fetchHandler flag>>> ",flag);
             }).catch(error => {
-                // console.log("======= fetchHandler error>>> ",error);
+                console.log("======= fetchHandler error>>> ",error);
                 isSyncing = false;
             })
             // console.log("======= end sync data",isSyncing);
@@ -768,46 +779,36 @@ async function _fetchOuts(db: PopDB) {
         let syncInfo = info;
         let start = 0;
         let end = null;
+        let pkrIndex = info.PkrIndex;
+        if (!info.CurrentBlock || info.CurrentBlock === 0) {
+            //Paging mainPKr
+            //get block Height
+            const resp:any = await jsonRpcReq('sero_blockNumber',['latest'])
+            const data:any = resp.data;
+            const blockHeight = new BigNumber(data.result,16).toNumber()
+            let startmain = start;
+            const pageSize = 100000;
+            let pageTotal = Math.ceil((blockHeight-startmain)/pageSize)
+            console.log("pageTotal>>",blockHeight,pageTotal);
+            let rtn:fetchRest
+            for(let i=0;i<pageTotal;i++){
+                end = startmain + pageSize
+                rtn = await fetchAndIndex(info.TK, 1, info.UseHashPKr, startmain, end);
+                await _indexUtxos(rtn,info.TK,db)
+                startmain = end
+            }
+            end = rtn.lastBlockNumber
+            pkrIndex = 2
+        } else {
+            start = info.CurrentBlock;
+        }
 
         while (true) {
-            if (!info.CurrentBlock || info.CurrentBlock === 0) {
-            } else {
-                start = info.CurrentBlock;
-            }
-            const rtn = await fetchAndIndex(info.TK, info.PkrIndex, info.UseHashPKr, start, end);
-
-            if (rtn.utxos && rtn.utxos.length > 0) {
-                for (let utxo of rtn.utxos) {
-                    utxo["TK"] = info.TK;
-                    const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
-                    const assets = await db.select(tables.assets.name, {Currency: currency});
-                    await db.update(tables.utxo.name, utxo)
-                    await changeAssets(assets, utxo, db, TxType.in);
-
-                    if (utxo.Nils) {
-                        for (let nil of utxo.Nils) {
-                            let nils: Nils = {Nil: nil, Root: utxo.Root}
-                            await db.update(tables.nils.name, nils);
-                        }
-                    }
-                }
-            }
-
-            if (rtn.txInfos && rtn.txInfos.length > 0) {
-                for (let txData of rtn.txInfos) {
-                    txData.TK = info.TK
-                    txData.Num_TxHash = txData.Num + "_" + txData.TxHash;
-
-                    _deletePending(db, txData);
-
-                    await db.update(tables.tx.name, txData);
-                }
-            }
-
+            const rtn = await fetchAndIndex(info.TK, pkrIndex, info.UseHashPKr, start, end);
+            await _indexUtxos(rtn,info.TK,db)
             if (rtn.useHashPKr) {
                 syncInfo.UseHashPKr = true
             }
-
             if (rtn.again === true) {
                 syncInfo.PkrIndex = syncInfo.PkrIndex + 1;
                 let version = 1;
@@ -816,22 +817,50 @@ async function _fetchOuts(db: PopDB) {
                     version = 2
                 }
                 syncInfo.PKr = jsuperzk.createPkrHash(info.TK, syncInfo.PkrIndex, version)
-                end = rtn.lastBlockNumber
+                // end = rtn.lastBlockNumber
+                pkrIndex = syncInfo.PkrIndex
             } else {
-                syncInfo.CurrentBlock = rtn.lastBlockNumber + 1;
+                syncInfo.CurrentBlock = rtn.lastBlockNumber;
                 latestBlock = rtn.lastBlockNumber;
                 break
             }
         }
         await db.update(tables.syncInfo.name, syncInfo)
-
         await _checkNil(info.TK)
+    }
+}
 
+async function _indexUtxos(rtn:fetchRest,tk:string,db:PopDB) {
+    if (rtn.utxos && rtn.utxos.length > 0) {
+        for (let utxo of rtn.utxos) {
+            utxo["TK"] = tk;
+            const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
+            const assets = await db.select(tables.assets.name, {Currency: currency});
+            await db.update(tables.utxo.name, utxo)
+            await changeAssets(assets, utxo, db, TxType.in);
+
+            if (utxo.Nils) {
+                for (let nil of utxo.Nils) {
+                    let nils: Nils = {Nil: nil, Root: utxo.Root}
+                    await db.update(tables.nils.name, nils);
+                }
+            }
+        }
+    }
+    if (rtn.txInfos && rtn.txInfos.length > 0) {
+        for (let txData of rtn.txInfos) {
+            txData.TK = tk
+            txData.Num_TxHash = txData.Num + "_" + txData.TxHash;
+
+            _deletePending(db, txData);
+
+            await db.update(tables.tx.name, txData);
+        }
     }
 }
 
 function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start: number, end: any): Promise<fetchRest> {
-    // console.log("fetchAndIndex>>>> ",pkrIndex,useHashPkr,start,end);
+    console.log("fetchAndIndex>>>> ",pkrIndex,useHashPkr,start,end);
     return new Promise((resolve, reject) => {
         const pkrRest = genPKrs(tk, pkrIndex, useHashPkr);
         let param = [];
@@ -845,10 +874,8 @@ function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start:
             param = [pkrRest.PKrs, start, null]
         }
 
-
-        jsonRpcReq("light_getOutsByPKr", param).then((response) => {
-            // @ts-ignore
-            const data = response.data;
+        jsonRpcReq("light_getOutsByPKr", param).then((response:any) => {
+            const data:any = response.data;
             let rest: fetchRest = {
                 utxos: null,
                 again: false,
@@ -861,14 +888,12 @@ function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start:
             let hasResWithHashPkr = false
             let hasResWithOldPkr = false
             if (data.result) {
-                let lastBlockNumber = start;
                 const blocks = data.result.BlockOuts;
                 const outs = [];
                 const txInfos = [];
                 let Utxos = [];
                 if (blocks && blocks.length > 0) {
                     blocks.forEach(function (block, index) {
-                        lastBlockNumber = Math.max(block.Num, lastBlockNumber);
                         let blockDatas = block.Data;
                         blockDatas.forEach(function (blockData, index) {
                             outs.push(blockData.Out);
@@ -928,11 +953,7 @@ function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start:
                 rest.utxos = Utxos;
                 rest.lastBlockNumber = data.result.CurrentNum;
                 rest.remoteNum = data.result.CurrentNum
-                if (rest.remoteNum > end) {
-                    rest.nextNum = end + 1
-                } else {
-                    rest.nextNum = data.result.CurrentNum + 1
-                }
+
                 if (!useHashPkr && hasResWithHashPkr && !hasResWithOldPkr) {
                     rest.useHashPKr = true
                 }
@@ -1002,7 +1023,6 @@ function genPKrs(tk: string, index: number, useHashPkr: boolean): { PKrTypeMap: 
     if (pkrs.indexOf(pkrMain) === -1) {
         pkrs.push(pkrMain)
     }
-
     if (!isNew) {
         const pkrMainOld = jsuperzk.createOldPkrHash(tk, 1, version)
         if (!useHashPkr) {
