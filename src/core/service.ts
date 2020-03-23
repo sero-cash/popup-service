@@ -195,12 +195,15 @@ async function _commitTx(tx: Tx): Promise<string | null> {
         let preTxParam = _genPrePramas(tx, acInfo);
         let rest = await genTxParam(preTxParam, new TxGenerator(), new TxState());
 
+        if(rest.Ins && rest.Ins.length>1000){
+            return new Promise<string | null>((resolve, reject) => {
+                reject("Exceeded the maximum number of UTXOs")
+            })
+        }
+
         rest.Z = false;
         const signRet = signTx(tx.SK, rest)
-        // console.log("tx >>> rest: ", rest, JSON.stringify(rest));
-        // console.log("tx >>> signRet: ", signRet, JSON.stringify(signRet));
         const resp = await jsonRpcReq('sero_commitTx', [signRet])
-        // console.log("tx >>> resp: ", resp);
 
         return new Promise<string | null>((resolve, reject) => {
             // @ts-ignore
