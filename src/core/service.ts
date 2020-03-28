@@ -13,14 +13,14 @@ import {genTxParam, signTx} from "jsuperzk/dist/tx/tx";
 import {Asset, Token, Witness, ZPkg} from "jsuperzk/dist/types/types";
 
 let db: Map<string, PopDB> = new Map<string, PopDB>();
-
 let assets: Map<string, any> = new Map<string, any>();
-
+let isSyncing: Map<string,boolean> = new Map<string,boolean>();
+let numHashCache : Map<string,boolean> = new Map<string,boolean>()
 
 let latestSyncTime = new Date().getTime();
 let latestBlock = 0;
 let syncIntervalId = null;
-let isSyncing = false;
+
 let syncTime: number = 10 * 1000;
 let rpc = null;
 
@@ -337,10 +337,10 @@ function healthyCheck(message: Message) {
     }
     const tk:string = message.data;
     db.get(tk).selectId(tables.syncInfo.name, 1).then((info: SyncInfo)=>{
-        message.data = {health: health, latestSyncTime: latestSyncTime, isSyncing: isSyncing, latestBlock: info.CurrentBlock,pkrIndex:info.PkrIndex}
+        message.data = {health: health, latestSyncTime: latestSyncTime, isSyncing: isSyncing.get(tk), latestBlock: info.CurrentBlock,pkrIndex:info.PkrIndex}
         _postMessage(message)
     }).catch(error=>{
-        message.data = {health: health, latestSyncTime: latestSyncTime, isSyncing: isSyncing, latestBlock: 0,pkrIndex:1}
+        message.data = {health: health, latestSyncTime: latestSyncTime, isSyncing: isSyncing.get(tk), latestBlock: 0,pkrIndex:1}
         _postMessage(message)
     })
 
@@ -530,57 +530,57 @@ function initAccount(message: Message) {
 
 function clearData(message: Message) {
     _clearData(message.data).then(data => {
-        isSyncing = false;
         message.data = "Success"
         _postMessage(message)
     }).catch(e => {
-        isSyncing = false;
         message.error = e.message
         _postMessage(message)
     })
 }
 
 async function _clearData(tk:string) {
-    if (isSyncing === false) {
-        isSyncing = true;
-        if(tk){
+    if(tk){
+        let _isSyncing = isSyncing.get(tk)
+        if (_isSyncing === false) {
             assets.delete(tk)
             await _clear(db.get(tk))
-        }else{
-            assets.clear()
-            let dbEntries = db.entries();
-            let dbRes = dbEntries.next();
-            while (!dbRes.done) {
-                let _db = dbRes.value[1]
-                await _clear(_db)
-                dbRes = dbEntries.next()
-            }
         }
-
-        return new Promise(function (resolve) {
-            resolve("Data clear success!")
-        })
-    } else {
-        return new Promise(function (resolve, reject) {
-            reject("Data synchronization...")
-        })
+    }else{
+        assets.clear()
+        let dbEntries = db.entries();
+        let dbRes = dbEntries.next();
+        while (!dbRes.done) {
+            let _db = dbRes.value[1]
+            await _clear(_db)
+            dbRes = dbEntries.next()
+        }
     }
 
-    async function _clear(_db:PopDB) {
-        await _db.clearTable(tables.utxo.name)
-        await _db.clearTable(tables.txBase.name)
-        await _db.clearTable(tables.assets.name)
-        await _db.clearTable(tables.assetUtxo.name)
-        await _db.clearTable(tables.tx.name)
-        await _db.clearTable(tables.nils.name)
-        await _db.clearTable(tables.txCurrency.name)
+    return new Promise(function (resolve) {
+        resolve("Data clear success!")
+    })
 
+    async function _clear(_db:PopDB) {
         const info: SyncInfo = <SyncInfo>await _db.selectId(tables.syncInfo.name, 1)
-        info.CurrentBlock = 0;
-        info.PKr = info.MainPKr;
-        info.PkrIndex = 1;
-        info.UseHashPKr = false;
-        await _db.update(tables.syncInfo.name, info)
+        let _isSyncing = isSyncing.get(info.TK)
+        if(_isSyncing === false){
+            info.CurrentBlock = 0;
+            info.PKr = info.MainPKr;
+            info.PkrIndex = 1;
+            info.UseHashPKr = false;
+
+            await _db.update(tables.syncInfo.name, info)
+
+            await _db.clearTable(tables.utxo.name)
+            await _db.clearTable(tables.txBase.name)
+            await _db.clearTable(tables.assets.name)
+            await _db.clearTable(tables.assetUtxo.name)
+            await _db.clearTable(tables.tx.name)
+            await _db.clearTable(tables.nils.name)
+            await _db.clearTable(tables.txCurrency.name)
+        }else{
+            return new Promise((resolve) => {resolve("Data clear ing... ")})
+        }
     }
 }
 
@@ -594,7 +594,7 @@ function balancesOf(message: Message) {
         return
     }
 
-    if(isSyncing){
+    if(isSyncing.get(tk) === true){ //get cache assets
         message.data = assets.get(tk)
         _postMessage(message)
     }else{
@@ -603,7 +603,7 @@ function balancesOf(message: Message) {
         } else {
             setTimeout(function () {
                 _getBalance();
-            }, 1000)
+            }, 500)
         }
     }
 
@@ -649,7 +649,6 @@ function init(message: Message) {
     if (syncIntervalId) {
         clearInterval(syncIntervalId)
     }
-    isSyncing = false;
     _startSync();
 
     message.data = "success"
@@ -671,15 +670,11 @@ function _startSync(): void {
     }, syncTime)
 
     function _inner() {
-        if (!isSyncing) {
-            fetchHandler().then(flag => {
-                // console.log("======= fetchHandler flag>>> ",flag);
-            }).catch(error => {
-                console.log("======= fetchHandler error>>> ",error);
-                isSyncing = false;
-            })
-            // console.log("======= end sync data",isSyncing);
-        }
+        fetchHandler().then(flag => {
+            // console.log("======= fetchHandler flag>>> ",flag);
+        }).catch(error => {
+            console.log("======= fetchHandler error>>> ",error);
+        })
         _setLatestSyncTime();
     }
 }
@@ -687,14 +682,12 @@ function _startSync(): void {
 async function fetchHandler() {
     let dbEntries = db.entries();
     let dbRes = dbEntries.next();
-    isSyncing = true;
     // console.log("======= set isSyncing begin",isSyncing);
     while (!dbRes.done) {
         let _db = dbRes.value[1]
         await _fetchOuts(_db)
         dbRes = dbEntries.next();
     }
-    isSyncing = false;
     // console.log("======= set isSyncing end ",isSyncing);
     return new Promise(function (resolve) {
         resolve(isSyncing)
@@ -773,63 +766,66 @@ function _deletePending(db: PopDB, txData) {
 
 async function _fetchOuts(db: PopDB) {
     if (!db) {
-        return
+        return new Promise(resolve => {})
     }
 
-    const infos = await db.selectAll(tables.syncInfo.name);
-    // @ts-ignore
-    for (let info of infos) {
-        let syncInfo = info;
-        let start = 0;
-        let end = null;
-        let pkrIndex = info.PkrIndex;
-        if (!info.CurrentBlock || info.CurrentBlock === 0) {
-            //Paging mainPKr
-            //get block Height
-            const resp:any = await jsonRpcReq('sero_blockNumber',['latest'])
-            const data:any = resp.data;
-            const blockHeight = new BigNumber(data.result,16).toNumber()
-            let startmain = start;
-            const pageSize = 100000;
-            let pageTotal = Math.ceil((blockHeight-startmain)/pageSize)
-            console.log("pageTotal>>",blockHeight,pageTotal);
-            let rtn:fetchRest
-            for(let i=0;i<pageTotal;i++){
-                end = startmain + pageSize
-                rtn = await fetchAndIndex(info.TK, 1, info.UseHashPKr, startmain, end);
-                await _indexUtxos(rtn,info.TK,db)
-                startmain = end
-            }
-            end = rtn.lastBlockNumber
-            pkrIndex = 2
-        } else {
-            start = info.CurrentBlock;
-        }
-
-        while (true) {
-            const rtn = await fetchAndIndex(info.TK, pkrIndex, info.UseHashPKr, start, end);
-            await _indexUtxos(rtn,info.TK,db)
-            if (rtn.useHashPKr) {
-                syncInfo.UseHashPKr = true
-            }
-            if (rtn.again === true) {
-                syncInfo.PkrIndex = syncInfo.PkrIndex + 1;
-                let version = 1;
-                let isNew = isNewVersion(utils.toBuffer(info.TK));
-                if (isNew) {
-                    version = 2
+    const infos:any = await db.selectAll(tables.syncInfo.name);
+    if(infos && infos.length>0){
+        const info = infos[0];
+        if (isSyncing.get(info.TK) === true){
+            return new Promise(resolve => {})
+        }else{
+            isSyncing.set(info.TK,true)
+            let syncInfo = info;
+            let start = 0;
+            let end = null;
+            let pkrIndex = info.PkrIndex;
+            if (!info.CurrentBlock || info.CurrentBlock === 0) {
+                const resp:any = await jsonRpcReq('sero_blockNumber',['latest'])
+                const data:any = resp.data;
+                const blockHeight = new BigNumber(data.result,16).toNumber()
+                let startmain = start;
+                const pageSize = 100000;
+                let pageTotal = Math.ceil((blockHeight-startmain)/pageSize)
+                let rtn:fetchRest
+                for(let i=0;i<pageTotal;i++){
+                    end = startmain + pageSize
+                    rtn = await fetchAndIndex(info.TK, 1, info.UseHashPKr, startmain, end);
+                    await _indexUtxos(rtn,info.TK,db)
+                    startmain = end
                 }
-                syncInfo.PKr = jsuperzk.createPkrHash(info.TK, syncInfo.PkrIndex, version)
-                // end = rtn.lastBlockNumber
-                pkrIndex = syncInfo.PkrIndex
+                end = rtn.lastBlockNumber
+                pkrIndex = 2
             } else {
-                syncInfo.CurrentBlock = rtn.lastBlockNumber;
-                latestBlock = rtn.lastBlockNumber;
-                break
+                start = info.CurrentBlock;
             }
+
+            while (true) {
+                const rtn = await fetchAndIndex(info.TK, pkrIndex, info.UseHashPKr, start, end);
+                await _indexUtxos(rtn,info.TK,db)
+                if (rtn.useHashPKr) {
+                    syncInfo.UseHashPKr = true
+                }
+                if (rtn.again === true) {
+                    syncInfo.PkrIndex = syncInfo.PkrIndex + 1;
+                    let version = 1;
+                    let isNew = isNewVersion(utils.toBuffer(info.TK));
+                    if (isNew) {
+                        version = 2
+                    }
+                    syncInfo.PKr = jsuperzk.createPkrHash(info.TK, syncInfo.PkrIndex, version)
+                    // end = rtn.lastBlockNumber
+                    pkrIndex = syncInfo.PkrIndex
+                } else {
+                    syncInfo.CurrentBlock = rtn.lastBlockNumber;
+                    latestBlock = rtn.lastBlockNumber;
+                    break
+                }
+            }
+            await db.update(tables.syncInfo.name, syncInfo)
+            await _checkNil(info.TK)
+            isSyncing.set(info.TK,false)
         }
-        await db.update(tables.syncInfo.name, syncInfo)
-        await _checkNil(info.TK)
     }
 }
 
@@ -857,7 +853,9 @@ async function _indexUtxos(rtn:fetchRest,tk:string,db:PopDB) {
 
             _deletePending(db, txData);
 
-            await db.update(tables.tx.name, txData);
+            if(numHashCache.get(txData.Num_TxHash) === false){
+                await db.update(tables.tx.name, txData);
+            }
         }
     }
 }
@@ -1059,7 +1057,7 @@ async function _checkNil(tk: string) {
     // @ts-ignore
     for (let nil of nils) {
         nilArr.push(nil.Nil)
-        if (nilArr.length >= 100) {
+        if (nilArr.length >= 1000) {
             await _innerCheckNil(nilArr)
             nilArr = new Array<any>()
         }
@@ -1131,8 +1129,10 @@ async function _checkNil(tk: string) {
                         }
                     }
 
+                    if(numHashCache.get(txInfo.Num_TxHash) === false){
+                        await db.get(tk).update(tables.tx.name, txInfo)
+                    }
 
-                    await db.get(tk).update(tables.tx.name, txInfo)
                 }
             }
         }
