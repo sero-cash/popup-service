@@ -594,7 +594,7 @@ function balancesOf(message: Message) {
         return
     }
 
-    if(isSyncing.get(tk) === true){ //get cache assets
+    if(isSyncing.get(tk) === true && assets.get(tk)){ //get cache assets
         message.data = assets.get(tk)
         _postMessage(message)
     }else{
@@ -671,8 +671,9 @@ function _startSync(): void {
 
     function _inner() {
         fetchHandler().then(flag => {
-            // console.log("======= fetchHandler flag>>> ",flag);
+            isSyncing.clear()
         }).catch(error => {
+            isSyncing.clear()
             console.log("======= fetchHandler error>>> ",error);
         })
         _setLatestSyncTime();
@@ -685,7 +686,13 @@ async function fetchHandler() {
     // console.log("======= set isSyncing begin",isSyncing);
     while (!dbRes.done) {
         let _db = dbRes.value[1]
-        await _fetchOuts(_db)
+        const info:any = await _db.selectId(tables.syncInfo.name,1);
+        if(isSyncing.get(info.TK) === true){
+            continue
+        }
+        isSyncing.set(info.TK,true)
+        await _fetchOuts(_db,info)
+        isSyncing.set(info.TK,false)
         dbRes = dbEntries.next();
     }
     // console.log("======= set isSyncing end ",isSyncing);
@@ -700,7 +707,6 @@ async function changeAssets(assets, utxo, db: PopDB, txType: TxType) {
     if (utxo.Asset.Tkn) {
         const rootType = [utxo.Root, txType].join("_");
         const assetsUtxo = await db.select(tables.assetUtxo.name, {RootType: rootType})
-
         if (assets && assets.length > 0) {
             // @ts-ignore
             if (assetsUtxo && assetsUtxo.length > 0) {
@@ -764,69 +770,58 @@ function _deletePending(db: PopDB, txData) {
     })
 }
 
-async function _fetchOuts(db: PopDB) {
+async function _fetchOuts(db: PopDB,info:any) {
     if (!db) {
         return new Promise(resolve => {})
     }
+    let syncInfo = info;
+    let start = 0;
+    let end = null;
+    let pkrIndex = info.PkrIndex;
+    if (!info.CurrentBlock || info.CurrentBlock === 0) {
+        const resp:any = await jsonRpcReq('sero_blockNumber',['latest'])
+        const data:any = resp.data;
+        const blockHeight = new BigNumber(data.result,16).toNumber()
+        let startmain = start;
+        const pageSize = 200000;
+        let pageTotal = Math.ceil((blockHeight-startmain)/pageSize)
+        let rtn:fetchRest
+        for(let i=0;i<pageTotal;i++){
+            end = startmain + pageSize
+            rtn = await fetchAndIndex(info.TK, 1, info.UseHashPKr, startmain, end);
+            await _indexUtxos(rtn,info.TK,db)
+            startmain = end
+        }
+        end = rtn.lastBlockNumber
+        pkrIndex = 2
+    } else {
+        start = info.CurrentBlock;
+    }
 
-    const infos:any = await db.selectAll(tables.syncInfo.name);
-    if(infos && infos.length>0){
-        const info = infos[0];
-        if (isSyncing.get(info.TK) === true){
-            return new Promise(resolve => {})
-        }else{
-            isSyncing.set(info.TK,true)
-            let syncInfo = info;
-            let start = 0;
-            let end = null;
-            let pkrIndex = info.PkrIndex;
-            if (!info.CurrentBlock || info.CurrentBlock === 0) {
-                const resp:any = await jsonRpcReq('sero_blockNumber',['latest'])
-                const data:any = resp.data;
-                const blockHeight = new BigNumber(data.result,16).toNumber()
-                let startmain = start;
-                const pageSize = 100000;
-                let pageTotal = Math.ceil((blockHeight-startmain)/pageSize)
-                let rtn:fetchRest
-                for(let i=0;i<pageTotal;i++){
-                    end = startmain + pageSize
-                    rtn = await fetchAndIndex(info.TK, 1, info.UseHashPKr, startmain, end);
-                    await _indexUtxos(rtn,info.TK,db)
-                    startmain = end
-                }
-                end = rtn.lastBlockNumber
-                pkrIndex = 2
-            } else {
-                start = info.CurrentBlock;
+    while (true) {
+        const rtn = await fetchAndIndex(info.TK, pkrIndex, info.UseHashPKr, start, end);
+        await _indexUtxos(rtn,info.TK,db)
+        if (rtn.useHashPKr) {
+            syncInfo.UseHashPKr = true
+        }
+        if (rtn.again === true) {
+            syncInfo.PkrIndex = syncInfo.PkrIndex + 1;
+            let version = 1;
+            let isNew = isNewVersion(utils.toBuffer(info.TK));
+            if (isNew) {
+                version = 2
             }
-
-            while (true) {
-                const rtn = await fetchAndIndex(info.TK, pkrIndex, info.UseHashPKr, start, end);
-                await _indexUtxos(rtn,info.TK,db)
-                if (rtn.useHashPKr) {
-                    syncInfo.UseHashPKr = true
-                }
-                if (rtn.again === true) {
-                    syncInfo.PkrIndex = syncInfo.PkrIndex + 1;
-                    let version = 1;
-                    let isNew = isNewVersion(utils.toBuffer(info.TK));
-                    if (isNew) {
-                        version = 2
-                    }
-                    syncInfo.PKr = jsuperzk.createPkrHash(info.TK, syncInfo.PkrIndex, version)
-                    // end = rtn.lastBlockNumber
-                    pkrIndex = syncInfo.PkrIndex
-                } else {
-                    syncInfo.CurrentBlock = rtn.lastBlockNumber;
-                    latestBlock = rtn.lastBlockNumber;
-                    break
-                }
-            }
-            await db.update(tables.syncInfo.name, syncInfo)
-            await _checkNil(info.TK)
-            isSyncing.set(info.TK,false)
+            syncInfo.PKr = jsuperzk.createPkrHash(info.TK, syncInfo.PkrIndex, version)
+            // end = rtn.lastBlockNumber
+            pkrIndex = syncInfo.PkrIndex
+        } else {
+            syncInfo.CurrentBlock = rtn.lastBlockNumber;
+            latestBlock = rtn.lastBlockNumber;
+            break
         }
     }
+    await db.update(tables.syncInfo.name, syncInfo)
+    await _checkNil(info.TK)
 }
 
 async function _indexUtxos(rtn:fetchRest,tk:string,db:PopDB) {
@@ -853,9 +848,7 @@ async function _indexUtxos(rtn:fetchRest,tk:string,db:PopDB) {
 
             _deletePending(db, txData);
 
-            if(numHashCache.get(txData.Num_TxHash) === false){
-                await db.update(tables.tx.name, txData);
-            }
+            await db.update(tables.tx.name, txData);
         }
     }
 }
@@ -1128,11 +1121,7 @@ async function _checkNil(tk: string) {
                             }
                         }
                     }
-
-                    if(numHashCache.get(txInfo.Num_TxHash) === false){
-                        await db.get(tk).update(tables.tx.name, txInfo)
-                    }
-
+                    await db.get(tk).update(tables.tx.name, txInfo)
                 }
             }
         }
