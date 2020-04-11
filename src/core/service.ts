@@ -20,6 +20,7 @@ let numHashCache : Map<string,boolean> = new Map<string,boolean>()
 let latestSyncTime = new Date().getTime();
 let latestBlock = 0;
 let syncIntervalId = null;
+let repairIntervalId = null;
 
 let syncTime: number = 10 * 1000;
 let rpc = null;
@@ -196,7 +197,7 @@ async function _commitTx(tx: Tx): Promise<string | null> {
         let rest = await genTxParam(preTxParam, new TxGenerator(), new TxState());
 
         if(rest.Ins && rest.Ins.length>1000){
-            return new Promise<string | null>((resolve, reject) => {
+            return  new Promise<string | null>((resolve, reject) => {
                 reject("Exceeded the maximum number of UTXOs")
             })
         }
@@ -207,20 +208,19 @@ async function _commitTx(tx: Tx): Promise<string | null> {
 
         return new Promise<string | null>((resolve, reject) => {
             // @ts-ignore
-            if (!resp.data.result) {
+            if (!resp.data.error) {
                 let txPending = tx;
                 txPending.From = acInfo.PKr
                 if (tx.Data) {
                     txPending.From = acInfo.MainPKr
                 }
                 _storePending(tk, signRet, txPending, _db).then().catch(e => {
-                    console.log("e:", e)
                 });
 
                 resolve(signRet.Hash)
             } else {
                 // @ts-ignore
-                reject(resp.data)
+                reject(resp.data.error.message)
             }
         })
     }
@@ -530,23 +530,22 @@ function initAccount(message: Message) {
 
 function clearData(message: Message) {
     _clearData(message.data).then(data => {
+        console.log("data>>> ",data);
+        isSyncing.clear()
         message.data = "Success"
         _postMessage(message)
     }).catch(e => {
-        message.error = e.message
+        console.log("data e>>> ",e);
+        isSyncing.clear()
+        message.error = e
         _postMessage(message)
     })
 }
 
 async function _clearData(tk:string) {
     if(tk){
-        let _isSyncing = isSyncing.get(tk)
-        if (_isSyncing === false) {
-            assets.delete(tk)
-            await _clear(db.get(tk))
-        }
+        await _clear(db.get(tk))
     }else{
-        assets.clear()
         let dbEntries = db.entries();
         let dbRes = dbEntries.next();
         while (!dbRes.done) {
@@ -556,14 +555,15 @@ async function _clearData(tk:string) {
         }
     }
 
-    return new Promise(function (resolve) {
-        resolve("Data clear success!")
-    })
-
     async function _clear(_db:PopDB) {
         const info: SyncInfo = <SyncInfo>await _db.selectId(tables.syncInfo.name, 1)
         let _isSyncing = isSyncing.get(info.TK)
-        if(_isSyncing === false){
+        if(_isSyncing === true){
+            await new Promise((resolve, reject) => {reject("Data synchronization ...")})
+        }else{
+            isSyncing.set(tk,true)
+
+            assets.delete(tk)
             info.CurrentBlock = 0;
             info.PKr = info.MainPKr;
             info.PkrIndex = 1;
@@ -578,8 +578,8 @@ async function _clearData(tk:string) {
             await _db.clearTable(tables.tx.name)
             await _db.clearTable(tables.nils.name)
             await _db.clearTable(tables.txCurrency.name)
-        }else{
-            return new Promise((resolve) => {resolve("Data clear ing... ")})
+
+            await new Promise((resolve) => {resolve("Clear Data Success !")})
         }
     }
 }
@@ -820,25 +820,25 @@ async function _fetchOuts(db: PopDB,info:any) {
             break
         }
     }
-    await db.update(tables.syncInfo.name, syncInfo)
     await _checkNil(info.TK)
+    await db.update(tables.syncInfo.name, syncInfo)
+    // await _repair(db)
 }
 
 async function _indexUtxos(rtn:fetchRest,tk:string,db:PopDB) {
     if (rtn.utxos && rtn.utxos.length > 0) {
         for (let utxo of rtn.utxos) {
             utxo["TK"] = tk;
-            const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
-            const assets = await db.select(tables.assets.name, {Currency: currency});
             await db.update(tables.utxo.name, utxo)
-            await changeAssets(assets, utxo, db, TxType.in);
-
             if (utxo.Nils) {
                 for (let nil of utxo.Nils) {
                     let nils: Nils = {Nil: nil, Root: utxo.Root}
                     await db.update(tables.nils.name, nils);
                 }
             }
+            const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
+            const assets = await db.select(tables.assets.name, {Currency: currency});
+            await changeAssets(assets, utxo, db, TxType.in);
         }
     }
     if (rtn.txInfos && rtn.txInfos.length > 0) {
@@ -1127,6 +1127,66 @@ async function _checkNil(tk: string) {
         }
     }
 }
+
+
+async function repairAssets() {
+    let dbEntries = db.entries();
+    let dbRes = dbEntries.next();
+    while (!dbRes.done) {
+        let _db = dbRes.value[1]
+        await _repair(_db)
+        dbRes = dbEntries.next()
+    }
+}
+
+async function _repair(db:PopDB) {
+    console.log("Repair Data === ", db.name);
+    const assetsUtxos:any = await db.selectAll(tables.assetUtxo.name)
+    let tmpMap : Map<string,AssetsInfo> = new Map<string, AssetsInfo>()
+    for(let i=0;i<assetsUtxos.length;i++){
+        const assetsUtxo:any = assetsUtxos[i];
+        const Tkn:any = assetsUtxo.Asset.Tkn;
+        const currency:string = hexToCy(Tkn.Currency);
+        const value:string = Tkn.Value;
+        console.log(assetsUtxo.RootType,currency,value);
+        if(tmpMap.has(currency)){
+            let asinf:AssetsInfo = tmpMap.get(currency)
+            let amount
+            if(assetsUtxo.RootType.indexOf("_1")>-1){
+                amount = new BigNumber(asinf.Amount).minus(new BigNumber(value)).toString(10)
+            }else{
+                amount = new BigNumber(asinf.Amount).plus(new BigNumber(value)).toString(10)
+            }
+            asinf.Amount = amount
+            tmpMap.set(currency,asinf)
+        }else{
+            let asinf:AssetsInfo = new class implements AssetsInfo {
+                Amount: string;
+                Currency: string;
+                Frozen: string;
+            };
+            asinf.Currency = currency;
+            if(assetsUtxo.RootType.indexOf("_1")>-1){
+                asinf.Amount = new BigNumber(value).multipliedBy(new BigNumber(-1)).toString(10);
+            }else{
+                asinf.Amount = value
+            }
+            tmpMap.set(currency,asinf)
+        }
+    }
+    let entry = tmpMap.entries();
+    let res = entry.next();
+    while (!res.done) {
+        console.log("tmpMap>>> ",JSON.stringify(res.value[1]))
+        const assets:any = await db.select(tables.assets.name, {Currency: res.value[0]});
+        let asset = assets[0];
+        asset.Amount = res.value[1].Amount
+        await db.update(tables.assets.name,asset)
+        res = entry.next()
+    }
+
+}
+
 
 
 function _setLatestSyncTime() {
