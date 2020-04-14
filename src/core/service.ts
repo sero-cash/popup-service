@@ -681,6 +681,16 @@ function _startSync(): void {
 }
 
 async function fetchHandler() {
+
+    let syncEntries = isSyncing.entries();
+    let syncRes = syncEntries.next();
+    while (!syncRes.done) {
+        if(syncRes.value[1]){
+            return new Promise(resolve => {resolve()})
+        }
+        syncRes = syncEntries.next();
+    }
+
     let dbEntries = db.entries();
     let dbRes = dbEntries.next();
     // console.log("======= set isSyncing begin",isSyncing);
