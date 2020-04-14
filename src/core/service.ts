@@ -671,7 +671,7 @@ function _startSync(): void {
 
     function _inner() {
         fetchHandler().then(flag => {
-            isSyncing.clear()
+
         }).catch(error => {
             isSyncing.clear()
             console.log("======= fetchHandler error>>> ",error);
@@ -775,28 +775,28 @@ async function _fetchOuts(db: PopDB,info:any) {
         return new Promise(resolve => {})
     }
     let syncInfo = info;
-    let start = 0;
+    let start = info.CurrentBlock;
     let end = null;
     let pkrIndex = info.PkrIndex;
-    if (!info.CurrentBlock || info.CurrentBlock === 0) {
-        const resp:any = await jsonRpcReq('sero_blockNumber',['latest'])
-        const data:any = resp.data;
-        const blockHeight = new BigNumber(data.result,16).toNumber()
-        let startmain = start;
-        const pageSize = 200000;
-        let pageTotal = Math.ceil((blockHeight-startmain)/pageSize)
-        let rtn:fetchRest
-        for(let i=0;i<pageTotal;i++){
-            end = startmain + pageSize
-            rtn = await fetchAndIndex(info.TK, 1, info.UseHashPKr, startmain, end);
-            await _indexUtxos(rtn,info.TK,db)
-            startmain = end
-        }
-        end = rtn.lastBlockNumber
-        pkrIndex = 2
-    } else {
-        start = info.CurrentBlock;
-    }
+    // if (!info.CurrentBlock || info.CurrentBlock === 0) {
+    //     const resp:any = await jsonRpcReq('sero_blockNumber',['latest'])
+    //     const data:any = resp.data;
+    //     const blockHeight = new BigNumber(data.result,16).toNumber()
+    //     let startmain = start;
+    //     const pageSize = 200000;
+    //     let pageTotal = Math.ceil((blockHeight-startmain)/pageSize)
+    //     let rtn:fetchRest
+    //     for(let i=0;i<pageTotal;i++){
+    //         end = startmain + pageSize
+    //         rtn = await fetchAndIndex(info.TK, 1, info.UseHashPKr, startmain, end);
+    //         await _indexUtxos(rtn,info.TK,db)
+    //         startmain = end
+    //     }
+    //     end = rtn.lastBlockNumber
+    //     pkrIndex = 2
+    // } else {
+    //     start = info.CurrentBlock;
+    // }
 
     while (true) {
         const rtn = await fetchAndIndex(info.TK, pkrIndex, info.UseHashPKr, start, end);
@@ -812,16 +812,19 @@ async function _fetchOuts(db: PopDB,info:any) {
                 version = 2
             }
             syncInfo.PKr = jsuperzk.createPkrHash(info.TK, syncInfo.PkrIndex, version)
-            // end = rtn.lastBlockNumber
+            end = rtn.lastBlockNumber
             pkrIndex = syncInfo.PkrIndex
-        } else {
+
             syncInfo.CurrentBlock = rtn.lastBlockNumber;
+            await db.update(tables.syncInfo.name, syncInfo)
+        } else {
             latestBlock = rtn.lastBlockNumber;
+            syncInfo.CurrentBlock = rtn.lastBlockNumber;
             break
         }
     }
-    await _checkNil(info.TK)
     await db.update(tables.syncInfo.name, syncInfo)
+    await _checkNil(info.TK)
     // await _repair(db)
 }
 
@@ -854,9 +857,10 @@ async function _indexUtxos(rtn:fetchRest,tk:string,db:PopDB) {
 }
 
 function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start: number, end: any): Promise<fetchRest> {
-    console.log("fetchAndIndex>>>> ",pkrIndex,useHashPkr,start,end);
+
     return new Promise((resolve, reject) => {
         const pkrRest = genPKrs(tk, pkrIndex, useHashPkr);
+
         let param = [];
         if (end && end > 0) {
             let currentPkr = []
@@ -867,7 +871,7 @@ function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start:
         } else {
             param = [pkrRest.PKrs, start, null]
         }
-
+        sendLog(`(${pkrRest.pkrMain})Fetch`,  JSON.stringify({pkrIndex:pkrIndex,start:start}))
         jsonRpcReq("light_getOutsByPKr", param).then((response:any) => {
             const data:any = response.data;
             let rest: fetchRest = {
@@ -914,14 +918,14 @@ function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start:
                                     id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
                                 }
                                 db.get(tk).update(tables.txCurrency.name, txCurrency).then(rest => {
-                                    console.log("index txCurrency success")
+                                    sendLog(`(${pkrRest.pkrMain}) AddTx`,  JSON.stringify({Block:txCurrency.Num,TxHash:txCurrency.TxHash}))
                                 }).catch(err => {
                                     console.log(err)
                                 });
                             }
 
                             db.get(tk).update(tables.txBase.name, txBase).then(rest => {
-                                console.log("index txInfo success")
+                                // console.log("index Tx Info",txBase.Num_TxHash)
                             }).catch(err => {
                                 console.log(err)
                             });
@@ -960,6 +964,14 @@ function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start:
     })
 }
 
+function sendLog(operator:string,content:string){
+    let msg:any = {};
+    msg.type="ServiceLog"
+    msg.operator= operator
+    msg.content= content
+    _postMessage(msg)
+}
+
 
 interface fetchRest {
     utxos: any
@@ -992,7 +1004,7 @@ function jsonRpcReq(_method: string, params: any) {
 }
 
 
-function genPKrs(tk: string, index: number, useHashPkr: boolean): { PKrTypeMap: Map<string, PKrType>, CurrentPKrMap: Map<string, boolean>, PKrs: Array<string> } {
+function genPKrs(tk: string, index: number, useHashPkr: boolean): { PKrTypeMap: Map<string, PKrType>, CurrentPKrMap: Map<string, boolean>, PKrs: Array<string>, pkrMain:string } {
     let pkrs = new Array()
     let pkrTypeMap = new Map<string, PKrType>();
     let currentPKrMap = new Map<string, boolean>()
@@ -1034,7 +1046,15 @@ function genPKrs(tk: string, index: number, useHashPkr: boolean): { PKrTypeMap: 
         }
     }
 
-    return {PKrTypeMap: pkrTypeMap, CurrentPKrMap: currentPKrMap, PKrs: pkrs}
+    return {PKrTypeMap: pkrTypeMap, CurrentPKrMap: currentPKrMap, PKrs: pkrs,pkrMain:ellipsisHash(pkrMain)}
+}
+
+function ellipsisHash(value) {
+    try {
+        return value.substring(0, 5) + "..." + value.substring(value.length - 5);
+    } catch (e) {
+        return value;
+    }
 }
 
 
@@ -1103,6 +1123,8 @@ async function _checkNil(tk: string) {
                                     await changeAssets(assets, utxo, db.get(tk), TxType.out);
                                     await db.get(tk).delete(tables.utxo.name, {Root: root})
 
+                                    sendLog(`Remove UTXO`,  JSON.stringify({Root:root}))
+
                                     if (utxo.Asset && utxo.Asset.Tkn) {
                                         const cy = utils.hexToCy(utxo.Asset.Tkn.Currency);
                                         const txCurrency: TxCurrency = {
@@ -1112,7 +1134,7 @@ async function _checkNil(tk: string) {
                                             id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
                                         }
                                         db.get(tk).update(tables.txCurrency.name, txCurrency).then(rest => {
-                                            console.log("index txCurrency success")
+                                            //sendLog(`(${pkrRest.pkrMain}) Fetch Block`,  JSON.stringify({pkrIndex:pkrIndex,start:start,end:end}))
                                         }).catch(err => {
                                             console.log(err)
                                         });

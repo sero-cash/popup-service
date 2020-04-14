@@ -18,12 +18,14 @@ class PopupService {
         let that = this;
         assetsWorker.onmessage = function (event) {
             let msg = event.data;
-            let cb = that.callbackHandler.get(msg.messageId);
-
-            // console.log("popservice send msg >>>>>>>> ", JSON.stringify(msg))
-            that.callbackHandler.delete(msg.messageId);
-            if (cb && typeof cb === "function") {
-                cb(msg);
+            if(msg && msg.type === "ServiceLog"){
+                console.log(`<div class='log'><span>${msg.operator}&nbsp;&gt;</span>&nbsp;<span>${msg.content}</span></div>`)
+            }else{
+                let cb = that.callbackHandler.get(msg.messageId);
+                that.callbackHandler.delete(msg.messageId);
+                if (cb && typeof cb === "function") {
+                    cb(msg);
+                }
             }
         }
     }
