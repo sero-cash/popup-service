@@ -237,21 +237,23 @@ class TxGenerator {
             for (let utxo of utxoAll) {
                 if (utxo.Asset && utxo.Asset.Tkn) {
                     let tkn = utxo.Asset.Tkn;
-                    if (hexToCy(tkn.Currency) === currency) {
-                        const now = new Date().getTime();
-                        const latest = utxo["timestamp"];
-                        if (latest && now - latest < 12 * 15 * 1000) {
-                            continue
-                        }
-                        //set utxo has used
-                        utxo["timestamp"] = now;
-                        db.get(accountKey).update(tables.utxo.name, utxo)
+                    if(tkn) {
+                        if (hexToCy(tkn.Currency) === currency) {
+                            const now = new Date().getTime();
+                            const latest = utxo["timestamp"];
+                            if (latest && now - latest < 4 * 15 * 1000) {
+                                continue
+                            }
+                            //set utxo has used
+                            utxo["timestamp"] = now;
+                            db.get(accountKey).update(tables.utxo.name, utxo)
 
-                        utxos.push(utxo)
-                        let amount = utils.toBN(tkn.Value);
-                        remain = remain.sub(amount);
-                        if (remain.isNeg() || remain.isZero()) {
-                            break;
+                            utxos.push(utxo)
+                            let amount = utils.toBN(tkn.Value);
+                            remain = remain.sub(amount);
+                            if (remain.isNeg() || remain.isZero()) {
+                                break;
+                            }
                         }
                     }
                 }
@@ -365,17 +367,18 @@ function _genTxInfo(txBases, txInfo, cy?: string) {
             for (let txBase of txBases) {
                 if (txBase.Asset && txBase.Asset.Tkn) {
                     let tkn = txBase.Asset.Tkn;
-
-                    if (!cy || cy && hexToCy(tkn.Currency) === cy) {
-                        let amount = new BigNumber(tkn.Value);
-                        if (txBase.TxType === TxType.out) {
-                            amount = amount.multipliedBy(-1)
-                        }
-                        if (TknMap.has(hexToCy(tkn.Currency))) {
-                            let amountStr = amount.plus(new BigNumber(TknMap.get(hexToCy(tkn.Currency)))).toString(10);
-                            TknMap.set(hexToCy(tkn.Currency), amountStr)
-                        } else {
-                            TknMap.set(hexToCy(tkn.Currency), amount.toString(10))
+                    if(tkn){
+                        if (!cy || cy && hexToCy(tkn.Currency) === cy) {
+                            let amount = new BigNumber(tkn.Value);
+                            if (txBase.TxType === TxType.out) {
+                                amount = amount.multipliedBy(-1)
+                            }
+                            if (TknMap.has(hexToCy(tkn.Currency))) {
+                                let amountStr = amount.plus(new BigNumber(TknMap.get(hexToCy(tkn.Currency)))).toString(10);
+                                TknMap.set(hexToCy(tkn.Currency), amountStr)
+                            } else {
+                                TknMap.set(hexToCy(tkn.Currency), amount.toString(10))
+                            }
                         }
                     }
                 }
@@ -744,15 +747,17 @@ async function changeAssets(assets, utxo, db: PopDB, txType: TxType) {
                 aUtxo["RootType"] = rootType;
                 await db.update(tables.assetUtxo.name, aUtxo)
 
-                let amount = utxo.Asset.Tkn.Value;
-                if (txType === TxType.out) {
-                    amount = new BigNumber(utxo.Asset.Tkn.Value).multipliedBy(-1).toString(10);
+                if(utxo.Asset.Tkn){
+                    let amount = utxo.Asset.Tkn.Value;
+                    if (txType === TxType.out) {
+                        amount = new BigNumber(utxo.Asset.Tkn.Value).multipliedBy(-1).toString(10);
+                    }
+                    let asset: AssetsInfo = {
+                        Currency: utils.hexToCy(utxo.Asset.Tkn.Currency),
+                        Amount: amount
+                    }
+                    await db.insert(tables.assets.name, asset)
                 }
-                let asset: AssetsInfo = {
-                    Currency: utils.hexToCy(utxo.Asset.Tkn.Currency),
-                    Amount: amount
-                }
-                await db.insert(tables.assets.name, asset)
             }
 
         }
@@ -849,9 +854,11 @@ async function _indexUtxos(rtn:fetchRest,tk:string,db:PopDB) {
                     await db.update(tables.nils.name, nils);
                 }
             }
-            const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
-            const assets = await db.select(tables.assets.name, {Currency: currency});
-            await changeAssets(assets, utxo, db, TxType.in);
+            if(utxo.Asset.Tkn){
+                const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
+                const assets = await db.select(tables.assets.name, {Currency: currency});
+                await changeAssets(assets, utxo, db, TxType.in);
+            }
         }
     }
     if (rtn.txInfos && rtn.txInfos.length > 0) {
@@ -1127,10 +1134,14 @@ async function _checkNil(tk: string) {
                                         Num_TxHash: [txInfo.Num, txInfo.TxHash].join("_"),
                                     }
                                     await db.get(tk).update(tables.txBase.name, txBase)
-                                    const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
-                                    const assets = await db.get(tk).select(tables.assets.name, {Currency: currency});
 
-                                    await changeAssets(assets, utxo, db.get(tk), TxType.out);
+                                    if(utxo.Asset.Tkn){
+                                        const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
+                                        const assets = await db.get(tk).select(tables.assets.name, {Currency: currency});
+                                        await changeAssets(assets, utxo, db.get(tk), TxType.out);
+                                    }
+
+
                                     await db.get(tk).delete(tables.utxo.name, {Root: root})
 
                                     sendLog(`Remove UTXO`,  JSON.stringify({Root:root}))
