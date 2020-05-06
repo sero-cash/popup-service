@@ -87,8 +87,9 @@ function commitTx(message: Message) {
 }
 
 function _genPrePramas(tx: Tx, acInfo: SyncInfo) {
-    let {From, To, Value, Cy, Data, Gas, GasPrice} = tx;
+    let {From, To, Value, Cy, Data, Gas, GasPrice,FeeCy} = tx;
     if (!Cy) Cy = "SERO"
+    if (!FeeCy) FeeCy = "SERO"
     if (!Gas) {
         Gas = "0x" + new BigNumber("4700000").toString(16);
     }
@@ -101,7 +102,7 @@ function _genPrePramas(tx: Tx, acInfo: SyncInfo) {
         Value: utils.toBN(Value).toString(10)
     }
     const fee = {
-        Currency: utils.cyToHex("SERO"),
+        Currency: utils.cyToHex(FeeCy),
         Value: new BigNumber(GasPrice, 16).multipliedBy(new BigNumber(Gas, 16)).toString(10)
     }
     const asset = {
@@ -239,13 +240,13 @@ class TxGenerator {
                     let tkn = utxo.Asset.Tkn;
                     if(tkn) {
                         if (hexToCy(tkn.Currency) === currency) {
-                            const now = new Date().getTime();
-                            const latest = utxo["timestamp"];
-                            if (latest && now - latest < 4 * 15 * 1000) {
-                                continue
-                            }
+                            // const now = new Date().getTime();
+                            // const latest = utxo["timestamp"];
+                            // if (latest && now - latest < 4 * 15 * 1000) {
+                            //     continue
+                            // }
                             //set utxo has used
-                            utxo["timestamp"] = now;
+                            // utxo["timestamp"] = now;
                             db.get(accountKey).update(tables.utxo.name, utxo)
 
                             utxos.push(utxo)

@@ -43,6 +43,7 @@ export interface Tx {
     Gas: string
     GasPrice: string
     SK: string
+    FeeCy?:string
 }
 
 
