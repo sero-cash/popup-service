@@ -18,6 +18,29 @@ const utxoTable: DatabaseTable = {
     ]
 }
 
+const utxoTktTable: DatabaseTable = {
+    name: "utxo_tkt",
+    keyPath: "id",
+    autoIncrement: true,
+    indexes: [
+        {
+            index: "Root",
+            relativeIndex: "Root",
+            unique: true
+        },
+        {
+            index: "TK",
+            relativeIndex: "TK",
+            unique: false
+        },
+        {
+            index: "Value",
+            relativeIndex: "Value",
+            unique: true
+        }
+    ]
+}
+
 const txTable: DatabaseTable = {
     name: "tx_info",
     keyPath: "id",
@@ -150,6 +173,7 @@ const dbConfig: Database = {
     databaseName: "popup",
     tables: [
         utxoTable,
+        utxoTktTable,
         nilsTable,
         txTable,
         syncInfoTable,
@@ -164,6 +188,7 @@ const dbConfig: Database = {
 const tables = {
     nils: nilsTable,
     utxo: utxoTable,
+    utxoTkt: utxoTktTable,
     tx: txTable,
     txBase: txBaseTable,
     syncInfo: syncInfoTable,

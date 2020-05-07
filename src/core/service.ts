@@ -15,12 +15,10 @@ import {Asset, Token, Witness, ZPkg} from "jsuperzk/dist/types/types";
 let db: Map<string, PopDB> = new Map<string, PopDB>();
 let assets: Map<string, any> = new Map<string, any>();
 let isSyncing: Map<string,boolean> = new Map<string,boolean>();
-let numHashCache : Map<string,boolean> = new Map<string,boolean>()
 
 let latestSyncTime = new Date().getTime();
 let latestBlock = 0;
 let syncIntervalId = null;
-let repairIntervalId = null;
 
 let syncTime: number = 10 * 1000;
 let rpc = null;
@@ -86,58 +84,98 @@ function commitTx(message: Message) {
 
 }
 
-function _genPrePramas(tx: Tx, acInfo: SyncInfo) {
-    let {From, To, Value, Cy, Data, Gas, GasPrice,FeeCy} = tx;
-    if (!Cy) Cy = "SERO"
-    if (!FeeCy) FeeCy = "SERO"
-    if (!Gas) {
-        Gas = "0x" + new BigNumber("4700000").toString(16);
-    }
-    if (!GasPrice) {
-        GasPrice = "0x" + new BigNumber("1000000000").toString(16);
-    }
+async function _genPrePramas(tx: Tx, acInfo: SyncInfo) {
+    return new Promise((resolve, reject) => {
+        let {From, To, Value, Cy, Data, Gas, GasPrice,FeeCy} = tx;
+        if (!Cy) Cy = "SERO"
+        if (!FeeCy) FeeCy = "SERO"
+        if (!Gas) {
+            Gas = "0x" + new BigNumber("4700000").toString(16);
+        }
+        if (!GasPrice) {
+            GasPrice = "0x" + new BigNumber("1000000000").toString(16);
+        }
 
-    const tkn = {
-        Currency: utils.cyToHex(Cy),
-        Value: utils.toBN(Value).toString(10)
-    }
-    const fee = {
-        Currency: utils.cyToHex(FeeCy),
-        Value: new BigNumber(GasPrice, 16).multipliedBy(new BigNumber(Gas, 16)).toString(10)
-    }
-    const asset = {
-        Tkn: tkn,
-    }
-    const reception = {
-        Addr: To,
-        Asset: asset
-    }
+        const tkn = {
+            Currency: utils.cyToHex(Cy),
+            Value: utils.toBN(Value).toString(10)
+        }
+        const fee = {
+            Currency: utils.cyToHex(FeeCy),
+            Value: new BigNumber(GasPrice, 16).multipliedBy(new BigNumber(Gas, 16)).toString(10)
+        }
+        const asset = {
+            Tkn: tkn,
+        }
+        const reception = {
+            Addr: To,
+            Asset: asset
+        }
 
-    // const fee = new BigNumber(tx.Gas).multipliedBy(tx.GasPrice).toString(10)
-    const preTxParam: PreTxParam = {
-        From: From,
-        RefundTo: acInfo.PKr,
-        Fee: fee,
-        GasPrice: utils.toBN(GasPrice).toString(10),
-        Cmds: null,
-        Receptions: [reception],
-    }
+        let tknReceptions = [reception]
+        let tktReceptions = []
 
-    // contract
-    if (Data) {
-        preTxParam.Receptions = []
-        preTxParam.RefundTo = acInfo.MainPKr
-        preTxParam.Cmds = {
-            Contract: {
-                Data: Data,
-                To: utils.bs58ToHex(To) + "0000000000000000000000000000000000000000000000000000000000000000",
-                Asset: {
-                    Tkn: {Currency: utils.cyToHex(Cy), Value: utils.toBN(Value).toString()},
+        if(tx.Tkts.size>0){
+            const tkts = tx.Tkts;
+            let dbEntries = tkts.entries();
+            let dbRes = dbEntries.next();
+            while (!dbRes.done) {
+                const Tkt:any = {
+                    Category:dbRes.value[0],
+                    Value:dbRes.value[1]
+                }
+                const assetTkt:any = {
+                    Tkt:Tkt
+                }
+                tktReceptions.push({
+                    Addr: To,
+                    Asset: assetTkt
+                })
+                dbRes = dbEntries.next()
+            }
+        }
+
+        let receptions = tknReceptions.concat(tktReceptions)
+        console.log(receptions)
+        // const fee = new BigNumber(tx.Gas).multipliedBy(tx.GasPrice).toString(10)
+        const preTxParam: PreTxParam = {
+            From: From,
+            RefundTo: acInfo.PKr,
+            Fee: fee,
+            GasPrice: utils.toBN(GasPrice).toString(10),
+            Cmds: null,
+            Receptions: receptions,
+        }
+
+        // contract
+        if (Data) {
+            preTxParam.Receptions = []
+            preTxParam.RefundTo = acInfo.MainPKr
+            preTxParam.Cmds = {
+                Contract: {
+                    Data: Data,
+                    To: utils.bs58ToHex(To) + "0000000000000000000000000000000000000000000000000000000000000000",
+                    Asset: {
+                        Tkn: {Currency: utils.cyToHex(Cy), Value: utils.toBN(Value).toString()},
+                    }
+                }
+            }
+            if(tx.Tkts.size>0){
+                if(tx.Tkts.size>1){
+                    reject("Not support more tickets to contract!")
+                }else{
+                    const key = tx.Tkts.keys()[0]
+                    const value = tx.Tkts.get(key)
+                    preTxParam.Cmds.Contract.Asset.Tkt= {
+                        Category:key,
+                        Value:value
+                    }
                 }
             }
         }
-    }
-    return preTxParam;
+
+        resolve(preTxParam)
+    })
 }
 
 async function _storePending(tk, signRet, tx: Tx, _db) {
@@ -194,7 +232,7 @@ async function _commitTx(tx: Tx): Promise<string | null> {
         const _db = db.get(tk);
         const acInfo: SyncInfo = <SyncInfo>await _db.selectId(tables.syncInfo.name, 1)
 
-        let preTxParam = _genPrePramas(tx, acInfo);
+        let preTxParam = await _genPrePramas(tx, acInfo);
         let rest = await genTxParam(preTxParam, new TxGenerator(), new TxState());
 
         if(rest.Ins && rest.Ins.length>1000){
@@ -263,11 +301,20 @@ class TxGenerator {
         })
     }
 
-    findRootsByTicket(accountKey: string, tickets: Map<string, string>): Promise<{ utxos: Array<utxo>; remain: Map<string, string> }> {
+    async findRootsByTicket(accountKey: string, tickets: Map<string, string>): Promise<{ utxos: Array<utxo>; remain: Map<string, string> }> {
+        let utxos:Array<utxo> = new Array<utxo>();
+        if(tickets.size>0){
+            // @ts-ignore
+            for(let [catagory,value] of tickets){
+                const rests:any = await db.get(accountKey).select(tables.utxoTkt.name,{Value:value})
+                if(rests && rests.length>0){
+                    utxos.push(rests[0])
+                }
+            }
+        }
         return new Promise<{ utxos: Array<utxo>, remain: Map<string, string> }>(resolve => {
-            resolve({utxos: [], remain: new Map<string, string>()})
+            resolve({utxos: utxos, remain: new Map<string, string>()})
         })
-
     }
 
     getRoot(root: string): Promise<utxo> {
@@ -629,9 +676,30 @@ function balancesOf(message: Message) {
     }
 }
 
-function ticketsOf(tk: string): Message {
-
-    return {method: Method.BalanceOf, data: "success", error: null}
+function ticketsOf(message: Message) {
+    const tk: string = message.data;
+    db.get(tk).selectAll(tables.assetUtxo.name).then((rests:Array<utxo>)=>{
+        let utxoMap:Map<string,Array<string>> = new Map<string,Array<string>>()
+        for(let utxo of rests){
+            if(!utxo.Asset.Tkt || utxo.Asset.Tkt.Category){
+                continue
+            }
+            const key = utxo.Asset.Tkt.Category;
+            const value = utxo.Asset.Tkt.Value;
+            if(utxoMap.has(key)){
+                let o:Array<string> = utxoMap.get(key);
+                o.push(value)
+                utxoMap.set(key,o)
+            }else{
+                utxoMap.set(key,[value])
+            }
+        }
+        message.data = utxoMap
+        _postMessage(message)
+    }).catch(e=>{
+        message.error = typeof e == 'string'?e:e.message
+        _postMessage(message)
+    })
 }
 
 
@@ -848,7 +916,6 @@ async function _indexUtxos(rtn:fetchRest,tk:string,db:PopDB) {
     if (rtn.utxos && rtn.utxos.length > 0) {
         for (let utxo of rtn.utxos) {
             utxo["TK"] = tk;
-            await db.update(tables.utxo.name, utxo)
             if (utxo.Nils) {
                 for (let nil of utxo.Nils) {
                     let nils: Nils = {Nil: nil, Root: utxo.Root}
@@ -856,9 +923,14 @@ async function _indexUtxos(rtn:fetchRest,tk:string,db:PopDB) {
                 }
             }
             if(utxo.Asset.Tkn){
+                await db.update(tables.utxo.name, utxo)
+
                 const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
                 const assets = await db.select(tables.assets.name, {Currency: currency});
                 await changeAssets(assets, utxo, db, TxType.in);
+            }
+            if(utxo.Asset.Tkt){
+                await db.update(tables.utxoTkt.name, utxo)
             }
         }
     }

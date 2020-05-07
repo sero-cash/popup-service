@@ -44,6 +44,7 @@ export interface Tx {
     GasPrice: string
     SK: string
     FeeCy?:string
+    Tkts?:Map<string,string>
 }
 
 
