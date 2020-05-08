@@ -10,10 +10,10 @@ export class PopDB {
     tables: Array<DatabaseTable>
 
     constructor(config: Database) {
-        const {databaseName, tables} = config
+        const {databaseName, tables,version} = config
         this.name = databaseName
         this.tables = tables
-        this.createTable(this.tables)
+        this.createTable(this.tables,version)
     }
 
     createDateBase(name: string, version = 1) {
