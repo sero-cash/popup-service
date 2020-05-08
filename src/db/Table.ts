@@ -134,7 +134,11 @@ export class Table {
                             reject(e)
                         }
                     })
+                }else{
+                    resolve(true)
                 }
+            }).catch(e=>{
+                reject(e)
             })
         })
     }

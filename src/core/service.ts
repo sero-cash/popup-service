@@ -121,7 +121,7 @@ async function _genPrePramas(tx: Tx, acInfo: SyncInfo) {
             let dbRes = dbEntries.next();
             while (!dbRes.done) {
                 const Tkt:any = {
-                    Category:dbRes.value[0],
+                    Category:utils.cyToHex(dbRes.value[0]),
                     Value:dbRes.value[1]
                 }
                 const assetTkt:any = {
@@ -167,7 +167,7 @@ async function _genPrePramas(tx: Tx, acInfo: SyncInfo) {
                     const key = tx.Tkts.keys()[0]
                     const value = tx.Tkts.get(key)
                     preTxParam.Cmds.Contract.Asset.Tkt= {
-                        Category:key,
+                        Category:utils.cyToHex(key),
                         Value:value
                     }
                 }
@@ -304,12 +304,16 @@ class TxGenerator {
     async findRootsByTicket(accountKey: string, tickets: Map<string, string>): Promise<{ utxos: Array<utxo>; remain: Map<string, string> }> {
         let utxos:Array<utxo> = new Array<utxo>();
         if(tickets.size>0){
-            // @ts-ignore
-            for(let [catagory,value] of tickets){
-                const rests:any = await db.get(accountKey).select(tables.utxoTkt.name,{Value:value})
+            let dbEntries = tickets.entries();
+            let dbRes = dbEntries.next();
+            while (!dbRes.done) {
+                let value = dbRes.value[0]
+                const rests:any = await db.get(accountKey).select(tables.tickets.name,{Value:value})
                 if(rests && rests.length>0){
-                    utxos.push(rests[0])
+                    const utxoTkts:any = await db.get(accountKey).select(tables.utxoTkt.name,{Root:rests[0].Root})
+                    utxos.push(utxoTkts[0])
                 }
+                dbRes = dbEntries.next()
             }
         }
         return new Promise<{ utxos: Array<utxo>, remain: Map<string, string> }>(resolve => {
@@ -432,12 +436,13 @@ function _genTxInfo(txBases, txInfo, cy?: string) {
                 }
 
                 if (txBase.Asset && txBase.Asset.Tkt) {
+                    const key = hexToCy(txBase.Asset.Tkt.Category)
                     if (TktMap.has(txBase.Asset.Tkt)) {
-                        let val = TktMap.get(txBase.Asset.Tkt.Category)
+                        let val = TktMap.get(key)
                         // @ts-ignore
-                        TktMap.set(txBase.Asset.Tkt.Category, val.push(txBase.Asset.Tkt.Value))
+                        TktMap.set(key, val.push(txBase.Asset.Tkt.Value))
                     } else {
-                        TktMap.set(txBase.Asset.Tkt.Category, [txBase.Asset.Tkt.Value])
+                        TktMap.set(key, [txBase.Asset.Tkt.Value])
                     }
                 }
             }
@@ -629,6 +634,8 @@ async function _clearData(tk:string) {
             await _db.clearTable(tables.tx.name)
             await _db.clearTable(tables.nils.name)
             await _db.clearTable(tables.txCurrency.name)
+            await _db.clearTable(tables.utxoTkt.name)
+            await _db.clearTable(tables.tickets.name)
 
             await new Promise((resolve) => {resolve("Clear Data Success !")})
         }
@@ -678,14 +685,11 @@ function balancesOf(message: Message) {
 
 function ticketsOf(message: Message) {
     const tk: string = message.data;
-    db.get(tk).selectAll(tables.assetUtxo.name).then((rests:Array<utxo>)=>{
+    db.get(tk).selectAll(tables.tickets.name).then((rests:Array<any>)=>{
         let utxoMap:Map<string,Array<string>> = new Map<string,Array<string>>()
-        for(let utxo of rests){
-            if(!utxo.Asset.Tkt || utxo.Asset.Tkt.Category){
-                continue
-            }
-            const key = utxo.Asset.Tkt.Category;
-            const value = utxo.Asset.Tkt.Value;
+        for(let data of rests){
+            const key = hexToCy(data.Category);
+            const value = data.Value;
             if(utxoMap.has(key)){
                 let o:Array<string> = utxoMap.get(key);
                 o.push(value)
@@ -745,7 +749,15 @@ function _startSync(): void {
         fetchHandler().then(flag => {
 
         }).catch(error => {
-            isSyncing.clear()
+            let syncEntries = isSyncing.entries();
+            let syncRes = syncEntries.next();
+            while (!syncRes.done) {
+                if(syncRes.value[1]){
+                    console.log("======= recover syncing state >>> ",syncRes.value[0],false);
+                    isSyncing.set(syncRes.value[0],false)
+                }
+                syncRes = syncEntries.next();
+            }
             console.log("======= fetchHandler error>>> ",error);
         })
         _setLatestSyncTime();
@@ -777,7 +789,6 @@ async function fetchHandler() {
         isSyncing.set(info.TK,false)
         dbRes = dbEntries.next();
     }
-    // console.log("======= set isSyncing end ",isSyncing);
     return new Promise(function (resolve) {
         resolve(isSyncing)
     })
@@ -856,7 +867,7 @@ function _deletePending(db: PopDB, txData) {
 
 async function _fetchOuts(db: PopDB,info:any) {
     if (!db) {
-        return new Promise(resolve => {})
+        return new Promise((resolve, reject) => {reject("POPDB not init")})
     }
     let syncInfo = info;
     let start = info.CurrentBlock;
@@ -930,7 +941,10 @@ async function _indexUtxos(rtn:fetchRest,tk:string,db:PopDB) {
                 await changeAssets(assets, utxo, db, TxType.in);
             }
             if(utxo.Asset.Tkt){
-                await db.update(tables.utxoTkt.name, utxo)
+                let data = utxo;
+                await db.update(tables.utxoTkt.name, data)
+                console.log("indexTickets>> ",{Root:data.Root,Value:utxo.Asset.Tkt.Value,Category:utxo.Asset.Tkt.Category});
+                await db.update(tables.tickets.name,{Root:data.Root,Value:utxo.Asset.Tkt.Value,Category:utxo.Asset.Tkt.Category})
             }
         }
     }
@@ -946,112 +960,100 @@ async function _indexUtxos(rtn:fetchRest,tk:string,db:PopDB) {
     }
 }
 
-function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start: number, end: any): Promise<fetchRest> {
+async function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, start: number, end: any): Promise<fetchRest> {
 
-    return new Promise((resolve, reject) => {
-        const pkrRest = genPKrs(tk, pkrIndex, useHashPkr);
+    const pkrRest = genPKrs(tk, pkrIndex, useHashPkr);
 
-        let param = [];
-        if (end && end > 0) {
-            let currentPkr = []
-            pkrRest.CurrentPKrMap.forEach(((value, key) => {
-                currentPkr.push(key)
-            }))
-            param = [currentPkr, start, end]
-        } else {
-            param = [pkrRest.PKrs, start, null]
-        }
-        sendLog(`(${pkrRest.pkrMain})Fetch`,  JSON.stringify({pkrIndex:pkrIndex,start:start}))
-        jsonRpcReq("light_getOutsByPKr", param).then((response:any) => {
-            const data:any = response.data;
-            let rest: fetchRest = {
-                utxos: null,
-                again: false,
-                useHashPKr: false,
-                remoteNum: 0,
-                nextNum: 0,
-                lastBlockNumber: 0,
-                txInfos: null
-            }
-            let hasResWithHashPkr = false
-            let hasResWithOldPkr = false
-            if (data.result) {
-                const blocks = data.result.BlockOuts;
-                const outs = [];
-                const txInfos = [];
-                let Utxos = [];
-                if (blocks && blocks.length > 0) {
-                    blocks.forEach(function (block, index) {
-                        let blockDatas = block.Data;
-                        blockDatas.forEach(function (blockData, index) {
-                            outs.push(blockData.Out);
-                            let txInfo = blockData.TxInfo;
-                            let utxos = jsuperzk.decOut(tk, [blockData.Out])
-                            txInfo.Root = blockData.Out.Root;
-                            let txBase: TxBase = {
-                                TxHash: txInfo.TxHash,
-                                TxType: TxType.in,
-                                Root: blockData.Out.Root,
-                                Asset: utxos[0].Asset,
-                                TxHash_Root_TxType: [txInfo.TxHash, txInfo.Root, TxType.in].join("_"),
-                                Num_TxHash: [txInfo.Num, txInfo.TxHash].join("_"),
-                            }
-
-                            txInfos.push(txInfo);
-
-                            if (utxos[0].Asset && utxos[0].Asset.Tkn) {
-                                const cy = utils.hexToCy(utxos[0].Asset.Tkn.Currency);
-                                const txCurrency: TxCurrency = {
-                                    Num: txInfo.Num,
-                                    TxHash: txInfo.TxHash,
-                                    Currency: cy,
-                                    id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
-                                }
-                                db.get(tk).update(tables.txCurrency.name, txCurrency).then(rest => {
-                                    sendLog(`(${pkrRest.pkrMain}) AddTx`,  JSON.stringify({Block:txCurrency.Num,TxHash:txCurrency.TxHash}))
-                                }).catch(err => {
-                                    console.log(err)
-                                });
-                            }
-
-                            db.get(tk).update(tables.txBase.name, txBase).then(rest => {
-                                // console.log("index Tx Info",txBase.Num_TxHash)
-                            }).catch(err => {
-                                console.log(err)
-                            });
-                            Utxos = Utxos.concat(utxos)
-                        })
-                    });
-                }
-
-                Utxos.forEach((utxo) => {
-                    if (pkrRest.CurrentPKrMap.has(utxo.Pkr)) {
-                        rest.again = true
+    let param = [];
+    if (end && end > 0) {
+        let currentPkr = []
+        pkrRest.CurrentPKrMap.forEach(((value, key) => {
+            currentPkr.push(key)
+        }))
+        param = [currentPkr, start, end]
+    } else {
+        param = [pkrRest.PKrs, start, null]
+    }
+    sendLog(`(${pkrRest.pkrMain})Fetch`,  JSON.stringify({pkrIndex:pkrIndex,start:start}))
+    const response:any = await jsonRpcReq("light_getOutsByPKr", param);
+    const data:any = response.data;
+    let rest: fetchRest = {
+        utxos: null,
+        again: false,
+        useHashPKr: false,
+        remoteNum: 0,
+        nextNum: 0,
+        lastBlockNumber: 0,
+        txInfos: null
+    }
+    let hasResWithHashPkr = false
+    let hasResWithOldPkr = false
+    if (data.result) {
+        const blocks = data.result.BlockOuts;
+        const outs = [];
+        const txInfos = [];
+        let Utxos = [];
+        if (blocks && blocks.length > 0) {
+            for(let block of blocks){
+                let blockDatas = block.Data;
+                for(let blockData of blockDatas ){
+                    outs.push(blockData.Out);
+                    let txInfo = blockData.TxInfo;
+                    let utxos = jsuperzk.decOut(tk, [blockData.Out])
+                    txInfo.Root = blockData.Out.Root;
+                    let txBase: TxBase = {
+                        TxHash: txInfo.TxHash,
+                        TxType: TxType.in,
+                        Root: blockData.Out.Root,
+                        Asset: utxos[0].Asset,
+                        TxHash_Root_TxType: [txInfo.TxHash, txInfo.Root, TxType.in].join("_"),
+                        Num_TxHash: [txInfo.Num, txInfo.TxHash].join("_"),
                     }
-                    if (!useHashPkr) {
-                        if (pkrRest.PKrTypeMap.get(utxo.Pkr) === PKrType.New) {
-                            hasResWithHashPkr = true
-                        } else if (pkrRest.PKrTypeMap.get(utxo.Pkr) === PKrType.Old) {
-                            hasResWithOldPkr = true
+                    txInfos.push(txInfo);
+                    if (utxos[0].Asset && utxos[0].Asset.Tkn) {
+                        const cy = utils.hexToCy(utxos[0].Asset.Tkn.Currency);
+                        const txCurrency: TxCurrency = {
+                            Num: txInfo.Num,
+                            TxHash: txInfo.TxHash,
+                            Currency: cy,
+                            id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
                         }
+                        await db.get(tk).update(tables.txCurrency.name, txCurrency)
+                        sendLog(`(${pkrRest.pkrMain}) AddTx`,  JSON.stringify({Block:txCurrency.Num,TxHash:txCurrency.TxHash}))
                     }
-                })
-
-                rest.txInfos = txInfos
-                rest.utxos = Utxos;
-                rest.lastBlockNumber = data.result.CurrentNum;
-                rest.remoteNum = data.result.CurrentNum
-
-                if (!useHashPkr && hasResWithHashPkr && !hasResWithOldPkr) {
-                    rest.useHashPKr = true
+                    await db.get(tk).update(tables.txBase.name, txBase)
+                    Utxos = Utxos.concat(utxos)
                 }
             }
-            // console.log("fetchAndIndex result>>>> ",pkrIndex,useHashPkr,start,end,rest);
+        }
+
+        for(let utxo of Utxos){
+            if (pkrRest.CurrentPKrMap.has(utxo.Pkr)) {
+                rest.again = true
+            }
+            if (!useHashPkr) {
+                if (pkrRest.PKrTypeMap.get(utxo.Pkr) === PKrType.New) {
+                    hasResWithHashPkr = true
+                } else if (pkrRest.PKrTypeMap.get(utxo.Pkr) === PKrType.Old) {
+                    hasResWithOldPkr = true
+                }
+            }
+        }
+
+        rest.txInfos = txInfos
+        rest.utxos = Utxos;
+        rest.lastBlockNumber = data.result.CurrentNum;
+        rest.remoteNum = data.result.CurrentNum
+
+        if (!useHashPkr && hasResWithHashPkr && !hasResWithOldPkr) {
+            rest.useHashPKr = true
+        }
+
+        console.log("rest>>>",rest);
+        return new Promise(resolve => {
             resolve(rest)
-        }).catch(reason => {
-            reject(reason)
         })
-    })
+    }
 }
 
 function sendLog(operator:string,content:string){
@@ -1194,6 +1196,9 @@ async function _checkNil(tk: string) {
                             const root = nilData.Root;
                             const utxos = await db.get(tk).select(tables.utxo.name, {Root: root});
 
+                            await db.get(tk).delete(tables.tickets.name, {Root: root})
+                            await db.get(tk).delete(tables.utxoTkt.name, {Root: root})
+
                             if (utxos) {
                                 let utxo = utxos[0];
                                 if (utxo) {
@@ -1214,7 +1219,6 @@ async function _checkNil(tk: string) {
                                         await changeAssets(assets, utxo, db.get(tk), TxType.out);
                                     }
 
-
                                     await db.get(tk).delete(tables.utxo.name, {Root: root})
 
                                     sendLog(`Remove UTXO`,  JSON.stringify({Root:root}))
@@ -1227,11 +1231,7 @@ async function _checkNil(tk: string) {
                                             Currency: utils.hexToCy(utxo.Asset.Tkn.Currency),
                                             id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
                                         }
-                                        db.get(tk).update(tables.txCurrency.name, txCurrency).then(rest => {
-                                            //sendLog(`(${pkrRest.pkrMain}) Fetch Block`,  JSON.stringify({pkrIndex:pkrIndex,start:start,end:end}))
-                                        }).catch(err => {
-                                            console.log(err)
-                                        });
+                                        await db.get(tk).update(tables.txCurrency.name, txCurrency)
                                     }
                                 }
                             }
@@ -1293,7 +1293,6 @@ async function _repair(db:PopDB) {
     let entry = tmpMap.entries();
     let res = entry.next();
     while (!res.done) {
-        console.log("tmpMap>>> ",JSON.stringify(res.value[1]))
         const assets:any = await db.select(tables.assets.name, {Currency: res.value[0]});
         let asset = assets[0];
         asset.Amount = res.value[1].Amount

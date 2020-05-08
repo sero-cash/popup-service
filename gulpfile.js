@@ -6,5 +6,6 @@ var uglify = require("gulp-uglify");
 gulp.task("default", function () {
   return tsProject.src()
       .pipe(tsProject())
-      .pipe(uglify()).pipe(gulp.dest("lib"));
+      // .pipe(uglify())
+      .pipe(gulp.dest("lib"));
 });

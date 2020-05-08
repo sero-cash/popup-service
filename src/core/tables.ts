@@ -32,11 +32,24 @@ const utxoTktTable: DatabaseTable = {
             index: "TK",
             relativeIndex: "TK",
             unique: false
+        }
+    ]
+}
+
+const ticketsTable: DatabaseTable = {
+    name: "tickets",
+    keyPath: "id",
+    autoIncrement: true,
+    indexes: [
+        {
+            index: "Root",
+            relativeIndex: "Root",
+            unique: true
         },
         {
             index: "Value",
             relativeIndex: "Value",
-            unique: true
+            unique: false
         }
     ]
 }
@@ -174,6 +187,7 @@ const dbConfig: Database = {
     tables: [
         utxoTable,
         utxoTktTable,
+        ticketsTable,
         nilsTable,
         txTable,
         syncInfoTable,
@@ -189,6 +203,7 @@ const tables = {
     nils: nilsTable,
     utxo: utxoTable,
     utxoTkt: utxoTktTable,
+    tickets:ticketsTable,
     tx: txTable,
     txBase: txBaseTable,
     syncInfo: syncInfoTable,
@@ -199,6 +214,23 @@ const tables = {
 
 
 // ==== asset and tx interface
+
+export interface TxInfo {
+    TK: string
+    TxHash: string
+    Num_TxHash: string
+
+    BlockHash: string
+    From: string
+    Gas: number
+    GasPrice: number
+    GasUsed: number
+    Num: number
+    Time: number
+    To: string
+    State?: string
+
+}
 
 export interface TxInfo {
     TK: string
