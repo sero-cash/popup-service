@@ -240,13 +240,13 @@ class TxGenerator {
                     let tkn = utxo.Asset.Tkn;
                     if(tkn) {
                         if (hexToCy(tkn.Currency) === currency) {
-                            // const now = new Date().getTime();
-                            // const latest = utxo["timestamp"];
-                            // if (latest && now - latest < 4 * 15 * 1000) {
-                            //     continue
-                            // }
-                            //set utxo has used
-                            // utxo["timestamp"] = now;
+                            const now = new Date().getTime();
+                            const latest = utxo["timestamp"];
+                            if (latest && now - latest < 12 * 14 * 1000) {
+                                continue
+                            }
+                            // set utxo has used
+                            utxo["timestamp"] = now;
                             db.get(accountKey).update(tables.utxo.name, utxo)
 
                             utxos.push(utxo)
