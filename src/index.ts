@@ -46,6 +46,10 @@ class PopupService {
         this.handlerMsg(message, cb);
     }
 
+    ticketsOf(tk: string, cb: any) {
+        let message: Message = {method: Method.TicketsOf, data: tk}
+        this.handlerMsg(message, cb);
+    }
 
     getTxList(query:any, cb: any) {
         let message: Message = {method: Method.GetTxList, data: query}

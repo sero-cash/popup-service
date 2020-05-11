@@ -18,6 +18,42 @@ const utxoTable: DatabaseTable = {
     ]
 }
 
+const utxoTktTable: DatabaseTable = {
+    name: "utxo_tkt",
+    keyPath: "id",
+    autoIncrement: true,
+    indexes: [
+        {
+            index: "Root",
+            relativeIndex: "Root",
+            unique: true
+        },
+        {
+            index: "TK",
+            relativeIndex: "TK",
+            unique: false
+        }
+    ]
+}
+
+const ticketsTable: DatabaseTable = {
+    name: "tickets",
+    keyPath: "id",
+    autoIncrement: true,
+    indexes: [
+        {
+            index: "Root",
+            relativeIndex: "Root",
+            unique: true
+        },
+        {
+            index: "Value",
+            relativeIndex: "Value",
+            unique: false
+        }
+    ]
+}
+
 const txTable: DatabaseTable = {
     name: "tx_info",
     keyPath: "id",
@@ -150,6 +186,8 @@ const dbConfig: Database = {
     databaseName: "popup",
     tables: [
         utxoTable,
+        utxoTktTable,
+        ticketsTable,
         nilsTable,
         txTable,
         syncInfoTable,
@@ -158,12 +196,14 @@ const dbConfig: Database = {
         assetsUtxoTable,
         txCurrencyTable,
     ],
-    version: 1
+    version: 2
 }
 
 const tables = {
     nils: nilsTable,
     utxo: utxoTable,
+    utxoTkt: utxoTktTable,
+    tickets:ticketsTable,
     tx: txTable,
     txBase: txBaseTable,
     syncInfo: syncInfoTable,
@@ -174,6 +214,23 @@ const tables = {
 
 
 // ==== asset and tx interface
+
+export interface TxInfo {
+    TK: string
+    TxHash: string
+    Num_TxHash: string
+
+    BlockHash: string
+    From: string
+    Gas: number
+    GasPrice: number
+    GasUsed: number
+    Num: number
+    Time: number
+    To: string
+    State?: string
+
+}
 
 export interface TxInfo {
     TK: string

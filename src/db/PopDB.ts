@@ -10,10 +10,10 @@ export class PopDB {
     tables: Array<DatabaseTable>
 
     constructor(config: Database) {
-        const {databaseName, tables} = config
+        const {databaseName, tables,version} = config
         this.name = databaseName
         this.tables = tables
-        this.createTable(this.tables)
+        this.createTable(this.tables,version)
     }
 
     createDateBase(name: string, version = 1) {
@@ -131,7 +131,7 @@ export class PopDB {
         })
     }
 
-    update(name: string, data: any) {
+    async update(name: string, data: any) {
         return new Promise((resolve, reject) => {
             this.connect().then((db: IDBDatabase) => {
                 const table = new Table(name, db)
@@ -139,14 +139,15 @@ export class PopDB {
                     resolve(res)
                 }).catch((err: any) => {
                     // reject(err)
+                    console.log(name,data);
                     console.log(err);
-                    resolve(null)
+                    resolve(true)
                 })
             })
         })
     }
 
-    delete(name: string, data: any) {
+    async delete(name: string, data: any) {
         // console.log("delete >>>> ",name,data);
         return new Promise((resolve, reject) => {
             this.connect().then((db: IDBDatabase) => {
@@ -154,8 +155,9 @@ export class PopDB {
                 table.delete(data).then((res: any) => {
                     resolve(res)
                 }).catch((err: any) => {
+                    console.log(name,data);
                     console.log(err);
-                    resolve(null)
+                    resolve(true)
                 })
             })
         })
