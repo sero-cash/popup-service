@@ -47,6 +47,11 @@ export interface Tx {
     Tkts?:Map<string,string>
 }
 
+export interface BuyShareCmd {
+    Value:string
+    Vote:string
+    Pool:string
+}
 
 export interface PriceTickect{
     quoteVolume: string

@@ -115,7 +115,7 @@ async function _genPrePramas(tx: Tx, acInfo: SyncInfo) {
         let tknReceptions = [reception]
         let tktReceptions = []
 
-        if(tx.Tkts.size>0){
+        if(tx.Tkts && tx.Tkts.size>0){
             const tkts = tx.Tkts;
             let dbEntries = tkts.entries();
             let dbRes = dbEntries.next();
@@ -136,7 +136,6 @@ async function _genPrePramas(tx: Tx, acInfo: SyncInfo) {
         }
 
         let receptions = tknReceptions.concat(tktReceptions)
-        console.log(receptions)
         // const fee = new BigNumber(tx.Gas).multipliedBy(tx.GasPrice).toString(10)
         const preTxParam: PreTxParam = {
             From: From,
@@ -160,15 +159,19 @@ async function _genPrePramas(tx: Tx, acInfo: SyncInfo) {
                     }
                 }
             }
-            if(tx.Tkts.size>0){
+            if(tx.Tkts && tx.Tkts.size>0){
                 if(tx.Tkts.size>1){
                     reject("Not support more tickets to contract!")
                 }else{
-                    const key = tx.Tkts.keys()[0]
-                    const value = tx.Tkts.get(key)
-                    preTxParam.Cmds.Contract.Asset.Tkt= {
-                        Category:utils.cyToHex(key),
-                        Value:value
+                    let dbEntries = tx.Tkts.entries();
+                    let dbRes = dbEntries.next();
+                    while (!dbRes.done) {
+                        const Tkt:any = {
+                            Category:utils.cyToHex(dbRes.value[0]),
+                            Value:dbRes.value[1]
+                        }
+                        preTxParam.Cmds.Contract.Asset.Tkt= Tkt
+                        dbRes = dbEntries.next()
                     }
                 }
             }
@@ -233,7 +236,7 @@ async function _commitTx(tx: Tx): Promise<string | null> {
         const acInfo: SyncInfo = <SyncInfo>await _db.selectId(tables.syncInfo.name, 1)
 
         let preTxParam = await _genPrePramas(tx, acInfo);
-        let rest = await genTxParam(preTxParam, new TxGenerator(), new TxState());
+        let rest:any = await genTxParam(preTxParam, new TxGenerator(), new TxState());
 
         if(rest.Ins && rest.Ins.length>1000){
             return  new Promise<string | null>((resolve, reject) => {
@@ -254,8 +257,14 @@ async function _commitTx(tx: Tx): Promise<string | null> {
                     txPending.From = acInfo.MainPKr
                 }
                 _storePending(tk, signRet, txPending, _db).then().catch(e => {
+                    console.error(e)
                 });
 
+                updateUtxoTimestamp(rest.Ins,tk).then(rest=>{
+                    console.info("rest>> ", rest)
+                }).catch(e=>{
+                    console.error(e)
+                })
                 resolve(signRet.Hash)
             } else {
                 // @ts-ignore
@@ -264,6 +273,18 @@ async function _commitTx(tx: Tx): Promise<string | null> {
         })
     }
 
+}
+
+async function updateUtxoTimestamp(Ins:any,tk:string){
+    for(let gin of Ins){
+        const root = gin.Out.Root;
+        const rest:any = await db.get(tk).select(tables.utxo.name,{Root:root});
+        if(rest && rest.length>0){
+            const utxo = rest[0]
+            utxo["timestamp"] = new Date().getTime();
+            await db.get(tk).update(tables.utxo.name, utxo)
+        }
+    }
 }
 
 
@@ -284,9 +305,6 @@ class TxGenerator {
                                 continue
                             }
                             // set utxo has used
-                            utxo["timestamp"] = now;
-                            db.get(accountKey).update(tables.utxo.name, utxo)
-
                             utxos.push(utxo)
                             let amount = utils.toBN(tkn.Value);
                             remain = remain.sub(amount);
@@ -303,7 +321,7 @@ class TxGenerator {
 
     async findRootsByTicket(accountKey: string, tickets: Map<string, string>): Promise<{ utxos: Array<utxo>; remain: Map<string, string> }> {
         let utxos:Array<utxo> = new Array<utxo>();
-        if(tickets.size>0){
+        if(tickets && tickets.size>0){
             let dbEntries = tickets.entries();
             let dbRes = dbEntries.next();
             while (!dbRes.done) {
@@ -748,7 +766,7 @@ function _startSync(): void {
     function _inner() {
         fetchHandler().then(flag => {
 
-        }).catch(error => {
+        }).catch(e => {
             let syncEntries = isSyncing.entries();
             let syncRes = syncEntries.next();
             while (!syncRes.done) {
@@ -758,7 +776,9 @@ function _startSync(): void {
                 }
                 syncRes = syncEntries.next();
             }
-            console.log("======= fetchHandler error>>> ",error);
+            console.log("======= fetchHandler error>>> ",e);
+            const err = typeof e === 'string'?e:e.message;
+            sendLog(`Fetch Error:`,  err)
         })
         _setLatestSyncTime();
     }
