@@ -69,11 +69,11 @@ function commitTx(message: Message) {
     // console.log("commitTx >>> ", message, tx)
     try {
         _commitTx(tx).then(hash => {
-            // console.log("_commitTx hash:", hash)
+            console.log("_commitTx hash:", hash)
             message.data = hash;
             _postMessage(message)
         }).catch(err => {
-            // console.log("_commitTx err:", err)
+            console.error("_commitTx err:", err)
             message.error = err;
             _postMessage(message)
         })
@@ -86,7 +86,7 @@ function commitTx(message: Message) {
 
 async function _genPrePramas(tx: Tx, acInfo: SyncInfo) {
     return new Promise((resolve, reject) => {
-        let {From, To, Value, Cy, Data, Gas, GasPrice,FeeCy} = tx;
+        let {From, To, Value, Cy, Data, Gas, GasPrice,FeeCy,BuyShare} = tx;
         if (!Cy) Cy = "SERO"
         if (!FeeCy) FeeCy = "SERO"
         if (!Gas) {
@@ -153,11 +153,13 @@ async function _genPrePramas(tx: Tx, acInfo: SyncInfo) {
             preTxParam.Cmds = {
                 Contract: {
                     Data: Data,
-                    To: utils.bs58ToHex(To) + "0000000000000000000000000000000000000000000000000000000000000000",
                     Asset: {
                         Tkn: {Currency: utils.cyToHex(Cy), Value: utils.toBN(Value).toString()},
                     }
                 }
+            }
+            if(To){
+                preTxParam.Cmds.Contract.To = utils.bs58ToHex(To) + "0000000000000000000000000000000000000000000000000000000000000000";
             }
             if(tx.Tkts && tx.Tkts.size>0){
                 if(tx.Tkts.size>1){
@@ -173,6 +175,18 @@ async function _genPrePramas(tx: Tx, acInfo: SyncInfo) {
                         preTxParam.Cmds.Contract.Asset.Tkt= Tkt
                         dbRes = dbEntries.next()
                     }
+                }
+            }
+        }
+
+        if(BuyShare){
+            preTxParam.Receptions = []
+            preTxParam.RefundTo = acInfo.MainPKr
+            preTxParam.Cmds = {
+                BuyShare:{
+                    Pool:BuyShare.Pool,
+                    Value:new BigNumber(BuyShare.Value).toString(10),
+                    Vote:utils.bs58ToHex(BuyShare.Vote)
                 }
             }
         }
@@ -234,10 +248,8 @@ async function _commitTx(tx: Tx): Promise<string | null> {
     } else {
         const _db = db.get(tk);
         const acInfo: SyncInfo = <SyncInfo>await _db.selectId(tables.syncInfo.name, 1)
-
         let preTxParam = await _genPrePramas(tx, acInfo);
         let rest:any = await genTxParam(preTxParam, new TxGenerator(), new TxState());
-
         if(rest.Ins && rest.Ins.length>1000){
             return  new Promise<string | null>((resolve, reject) => {
                 reject("Exceeded the maximum number of UTXOs")

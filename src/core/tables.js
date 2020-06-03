@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.dbConfig = exports.tables = exports.TxType = void 0;
 var utxoTable = {
     name: "utxo",
     keyPath: "id",
@@ -13,6 +14,40 @@ var utxoTable = {
         {
             index: "TK",
             relativeIndex: "TK",
+            unique: false
+        }
+    ]
+};
+var utxoTktTable = {
+    name: "utxo_tkt",
+    keyPath: "id",
+    autoIncrement: true,
+    indexes: [
+        {
+            index: "Root",
+            relativeIndex: "Root",
+            unique: true
+        },
+        {
+            index: "TK",
+            relativeIndex: "TK",
+            unique: false
+        }
+    ]
+};
+var ticketsTable = {
+    name: "tickets",
+    keyPath: "id",
+    autoIncrement: true,
+    indexes: [
+        {
+            index: "Root",
+            relativeIndex: "Root",
+            unique: true
+        },
+        {
+            index: "Value",
+            relativeIndex: "Value",
             unique: false
         }
     ]
@@ -140,6 +175,8 @@ var dbConfig = {
     databaseName: "popup",
     tables: [
         utxoTable,
+        utxoTktTable,
+        ticketsTable,
         nilsTable,
         txTable,
         syncInfoTable,
@@ -148,12 +185,14 @@ var dbConfig = {
         assetsUtxoTable,
         txCurrencyTable,
     ],
-    version: 1
+    version: 2
 };
 exports.dbConfig = dbConfig;
 var tables = {
     nils: nilsTable,
     utxo: utxoTable,
+    utxoTkt: utxoTktTable,
+    tickets: ticketsTable,
     tx: txTable,
     txBase: txBaseTable,
     syncInfo: syncInfoTable,

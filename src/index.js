@@ -1,20 +1,26 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.PopupService = void 0;
 var types_1 = require("./core/types");
 var assetsWorker;
 var PopupService = /** @class */ (function () {
     function PopupService() {
         this.callbackHandler = new Map();
         this.messageId = 0;
+        // @ts-ignore
         assetsWorker = new Worker('./core/service.js', { type: 'module' });
         var that = this;
         assetsWorker.onmessage = function (event) {
             var msg = event.data;
-            var cb = that.callbackHandler.get(msg.messageId);
-            // console.log("popservice send msg >>>>>>>> ", JSON.stringify(msg))
-            that.callbackHandler.delete(msg.messageId);
-            if (cb && typeof cb === "function") {
-                cb(msg);
+            if (msg && msg.type === "ServiceLog") {
+                console.log("<div class='log'><span>" + msg.operator + "&nbsp;&gt;</span>&nbsp;<span>" + msg.content + "</span></div>");
+            }
+            else {
+                var cb = that.callbackHandler.get(msg.messageId);
+                that.callbackHandler.delete(msg.messageId);
+                if (cb && typeof cb === "function") {
+                    cb(msg);
+                }
             }
         };
     }
@@ -29,6 +35,10 @@ var PopupService = /** @class */ (function () {
     };
     PopupService.prototype.balanceOf = function (tk, cb) {
         var message = { method: types_1.Method.BalanceOf, data: tk };
+        this.handlerMsg(message, cb);
+    };
+    PopupService.prototype.ticketsOf = function (tk, cb) {
+        var message = { method: types_1.Method.TicketsOf, data: tk };
         this.handlerMsg(message, cb);
     };
     PopupService.prototype.getTxList = function (query, cb) {
@@ -52,12 +62,12 @@ var PopupService = /** @class */ (function () {
         var message = { method: types_1.Method.GetPrice, data: ticket };
         this.handlerMsg(message, cb);
     };
-    PopupService.prototype.clearData = function (cb) {
-        var message = { method: types_1.Method.ClearData, data: null };
+    PopupService.prototype.clearData = function (tk, cb) {
+        var message = { method: types_1.Method.ClearData, data: tk };
         this.handlerMsg(message, cb);
     };
-    PopupService.prototype.getSyncState = function (cb) {
-        var message = { method: types_1.Method.HealthyCheck, data: null };
+    PopupService.prototype.getSyncState = function (tk, cb) {
+        var message = { method: types_1.Method.HealthyCheck, data: tk };
         this.handlerMsg(message, cb);
     };
     PopupService.prototype.handlerMsg = function (message, cb) {

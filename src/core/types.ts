@@ -45,6 +45,7 @@ export interface Tx {
     SK: string
     FeeCy?:string
     Tkts?:Map<string,string>
+    BuyShare:BuyShareCmd
 }
 
 export interface BuyShareCmd {

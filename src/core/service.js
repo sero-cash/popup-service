@@ -37,7 +37,6 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 var PopDB_1 = require("../db/PopDB");
-var types_1 = require("./types");
 var tables_1 = require("./tables");
 var utils_1 = require("jsuperzk/dist/utils/utils");
 var axios_1 = require("axios");
@@ -46,9 +45,11 @@ var jsuperzk = require("jsuperzk/dist/index");
 var superzk = require("jsuperzk/dist/protocol/account");
 var tx_1 = require("jsuperzk/dist/tx/tx");
 var db = new Map();
+var assets = new Map();
+var isSyncing = new Map();
 var latestSyncTime = new Date().getTime();
+var latestBlock = 0;
 var syncIntervalId = null;
-var isSyncing = false;
 var syncTime = 10 * 1000;
 var rpc = null;
 var rpcId = 0;
@@ -67,7 +68,6 @@ var operations = {
     "getSeroPrice": getSeroPrice,
 };
 self.addEventListener('message', function (e) {
-    // console.log("popservice receive data: ", e.data);
     if (e.data && e.data.method) {
         if (operations[e.data.method]) {
             operations[e.data.method](e.data);
@@ -90,11 +90,11 @@ function commitTx(message) {
     // console.log("commitTx >>> ", message, tx)
     try {
         _commitTx(tx).then(function (hash) {
-            // console.log("_commitTx hash:", hash)
+            console.log("_commitTx hash:", hash);
             message.data = hash;
             _postMessage(message);
         }).catch(function (err) {
-            // console.log("_commitTx err:", err)
+            console.error("_commitTx err:", err);
             message.error = err;
             _postMessage(message);
         });
@@ -105,54 +105,114 @@ function commitTx(message) {
     }
 }
 function _genPrePramas(tx, acInfo) {
-    var From = tx.From, To = tx.To, Value = tx.Value, Cy = tx.Cy, Data = tx.Data, Gas = tx.Gas, GasPrice = tx.GasPrice;
-    if (!Cy)
-        Cy = "SERO";
-    if (!Gas) {
-        Gas = "0x" + new bignumber_js_1.default("4700000").toString(16);
-    }
-    if (!GasPrice) {
-        GasPrice = "0x" + new bignumber_js_1.default("1000000000").toString(16);
-    }
-    var tkn = {
-        Currency: utils_1.default.cyToHex(Cy),
-        Value: utils_1.default.toBN(Value).toString(10)
-    };
-    var fee = {
-        Currency: utils_1.default.cyToHex("SERO"),
-        Value: new bignumber_js_1.default(GasPrice, 16).multipliedBy(new bignumber_js_1.default(Gas, 16)).toString(10)
-    };
-    var asset = {
-        Tkn: tkn,
-    };
-    var reception = {
-        Addr: To,
-        Asset: asset
-    };
-    // const fee = new BigNumber(tx.Gas).multipliedBy(tx.GasPrice).toString(10)
-    var preTxParam = {
-        From: From,
-        RefundTo: acInfo.PKr,
-        Fee: fee,
-        GasPrice: utils_1.default.toBN(GasPrice).toString(10),
-        Cmds: null,
-        Receptions: [reception],
-    };
-    // contract
-    if (Data) {
-        preTxParam.Receptions = [];
-        preTxParam.RefundTo = acInfo.MainPKr;
-        preTxParam.Cmds = {
-            Contract: {
-                Data: Data,
-                To: utils_1.default.bs58ToHex(To) + "0000000000000000000000000000000000000000000000000000000000000000",
-                Asset: {
-                    Tkn: { Currency: utils_1.default.cyToHex(Cy), Value: utils_1.default.toBN(Value).toString() },
-                }
-            }
-        };
-    }
-    return preTxParam;
+    return __awaiter(this, void 0, void 0, function () {
+        return __generator(this, function (_a) {
+            return [2 /*return*/, new Promise(function (resolve, reject) {
+                    var From = tx.From, To = tx.To, Value = tx.Value, Cy = tx.Cy, Data = tx.Data, Gas = tx.Gas, GasPrice = tx.GasPrice, FeeCy = tx.FeeCy, BuyShare = tx.BuyShare;
+                    if (!Cy)
+                        Cy = "SERO";
+                    if (!FeeCy)
+                        FeeCy = "SERO";
+                    if (!Gas) {
+                        Gas = "0x" + new bignumber_js_1.default("4700000").toString(16);
+                    }
+                    if (!GasPrice) {
+                        GasPrice = "0x" + new bignumber_js_1.default("1000000000").toString(16);
+                    }
+                    var tkn = {
+                        Currency: utils_1.default.cyToHex(Cy),
+                        Value: utils_1.default.toBN(Value).toString(10)
+                    };
+                    var fee = {
+                        Currency: utils_1.default.cyToHex(FeeCy),
+                        Value: new bignumber_js_1.default(GasPrice, 16).multipliedBy(new bignumber_js_1.default(Gas, 16)).toString(10)
+                    };
+                    var asset = {
+                        Tkn: tkn,
+                    };
+                    var reception = {
+                        Addr: To,
+                        Asset: asset
+                    };
+                    var tknReceptions = [reception];
+                    var tktReceptions = [];
+                    if (tx.Tkts && tx.Tkts.size > 0) {
+                        var tkts = tx.Tkts;
+                        var dbEntries = tkts.entries();
+                        var dbRes = dbEntries.next();
+                        while (!dbRes.done) {
+                            var Tkt = {
+                                Category: utils_1.default.cyToHex(dbRes.value[0]),
+                                Value: dbRes.value[1]
+                            };
+                            var assetTkt = {
+                                Tkt: Tkt
+                            };
+                            tktReceptions.push({
+                                Addr: To,
+                                Asset: assetTkt
+                            });
+                            dbRes = dbEntries.next();
+                        }
+                    }
+                    var receptions = tknReceptions.concat(tktReceptions);
+                    // const fee = new BigNumber(tx.Gas).multipliedBy(tx.GasPrice).toString(10)
+                    var preTxParam = {
+                        From: From,
+                        RefundTo: acInfo.PKr,
+                        Fee: fee,
+                        GasPrice: utils_1.default.toBN(GasPrice).toString(10),
+                        Cmds: null,
+                        Receptions: receptions,
+                    };
+                    // contract
+                    if (Data) {
+                        preTxParam.Receptions = [];
+                        preTxParam.RefundTo = acInfo.MainPKr;
+                        preTxParam.Cmds = {
+                            Contract: {
+                                Data: Data,
+                                Asset: {
+                                    Tkn: { Currency: utils_1.default.cyToHex(Cy), Value: utils_1.default.toBN(Value).toString() },
+                                }
+                            }
+                        };
+                        if (To) {
+                            preTxParam.Cmds.Contract.To = utils_1.default.bs58ToHex(To) + "0000000000000000000000000000000000000000000000000000000000000000";
+                        }
+                        if (tx.Tkts && tx.Tkts.size > 0) {
+                            if (tx.Tkts.size > 1) {
+                                reject("Not support more tickets to contract!");
+                            }
+                            else {
+                                var dbEntries = tx.Tkts.entries();
+                                var dbRes = dbEntries.next();
+                                while (!dbRes.done) {
+                                    var Tkt = {
+                                        Category: utils_1.default.cyToHex(dbRes.value[0]),
+                                        Value: dbRes.value[1]
+                                    };
+                                    preTxParam.Cmds.Contract.Asset.Tkt = Tkt;
+                                    dbRes = dbEntries.next();
+                                }
+                            }
+                        }
+                    }
+                    if (BuyShare) {
+                        preTxParam.Receptions = [];
+                        preTxParam.RefundTo = acInfo.MainPKr;
+                        preTxParam.Cmds = {
+                            BuyShare: {
+                                Pool: BuyShare.Pool,
+                                Value: new bignumber_js_1.default(BuyShare.Value).toString(10),
+                                Vote: utils_1.default.bs58ToHex(BuyShare.Vote)
+                            }
+                        };
+                    }
+                    resolve(preTxParam);
+                })];
+        });
+    });
 }
 function _storePending(tk, signRet, tx, _db) {
     return __awaiter(this, void 0, void 0, function () {
@@ -210,7 +270,7 @@ function _storePending(tk, signRet, tx, _db) {
 }
 function _commitTx(tx) {
     return __awaiter(this, void 0, void 0, function () {
-        var tk, _db_1, acInfo_1, preTxParam, rest, signRet_1, resp_1;
+        var tk, _db_1, acInfo_1, preTxParam, rest_1, signRet_1, resp_1;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -224,36 +284,75 @@ function _commitTx(tx) {
                     return [4 /*yield*/, _db_1.selectId(tables_1.tables.syncInfo.name, 1)];
                 case 2:
                     acInfo_1 = _a.sent();
-                    preTxParam = _genPrePramas(tx, acInfo_1);
-                    return [4 /*yield*/, tx_1.genTxParam(preTxParam, new TxGenerator(), new TxState())];
+                    return [4 /*yield*/, _genPrePramas(tx, acInfo_1)];
                 case 3:
-                    rest = _a.sent();
-                    rest.Z = false;
-                    signRet_1 = tx_1.signTx(tx.SK, rest);
-                    return [4 /*yield*/, jsonRpcReq('sero_commitTx', [signRet_1])
-                        // console.log("tx >>> resp: ", resp);
-                    ];
+                    preTxParam = _a.sent();
+                    return [4 /*yield*/, tx_1.genTxParam(preTxParam, new TxGenerator(), new TxState())];
                 case 4:
+                    rest_1 = _a.sent();
+                    if (rest_1.Ins && rest_1.Ins.length > 1000) {
+                        return [2 /*return*/, new Promise(function (resolve, reject) {
+                                reject("Exceeded the maximum number of UTXOs");
+                            })];
+                    }
+                    rest_1.Z = false;
+                    signRet_1 = tx_1.signTx(tx.SK, rest_1);
+                    return [4 /*yield*/, jsonRpcReq('sero_commitTx', [signRet_1])];
+                case 5:
                     resp_1 = _a.sent();
-                    // console.log("tx >>> resp: ", resp);
                     return [2 /*return*/, new Promise(function (resolve, reject) {
                             // @ts-ignore
-                            if (!resp_1.data.result) {
+                            if (!resp_1.data.error) {
                                 var txPending = tx;
                                 txPending.From = acInfo_1.PKr;
                                 if (tx.Data) {
                                     txPending.From = acInfo_1.MainPKr;
                                 }
                                 _storePending(tk, signRet_1, txPending, _db_1).then().catch(function (e) {
-                                    console.log("e:", e);
+                                    console.error(e);
+                                });
+                                updateUtxoTimestamp(rest_1.Ins, tk).then(function (rest) {
+                                    console.info("rest>> ", rest);
+                                }).catch(function (e) {
+                                    console.error(e);
                                 });
                                 resolve(signRet_1.Hash);
                             }
                             else {
                                 // @ts-ignore
-                                reject(resp_1.data);
+                                reject(resp_1.data.error.message);
                             }
                         })];
+            }
+        });
+    });
+}
+function updateUtxoTimestamp(Ins, tk) {
+    return __awaiter(this, void 0, void 0, function () {
+        var _i, Ins_1, gin, root, rest, utxo_1;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    _i = 0, Ins_1 = Ins;
+                    _a.label = 1;
+                case 1:
+                    if (!(_i < Ins_1.length)) return [3 /*break*/, 5];
+                    gin = Ins_1[_i];
+                    root = gin.Out.Root;
+                    return [4 /*yield*/, db.get(tk).select(tables_1.tables.utxo.name, { Root: root })];
+                case 2:
+                    rest = _a.sent();
+                    if (!(rest && rest.length > 0)) return [3 /*break*/, 4];
+                    utxo_1 = rest[0];
+                    utxo_1["timestamp"] = new Date().getTime();
+                    return [4 /*yield*/, db.get(tk).update(tables_1.tables.utxo.name, utxo_1)];
+                case 3:
+                    _a.sent();
+                    _a.label = 4;
+                case 4:
+                    _i++;
+                    return [3 /*break*/, 1];
+                case 5: return [2 /*return*/];
             }
         });
     });
@@ -272,23 +371,23 @@ var TxGenerator = /** @class */ (function () {
                         return [2 /*return*/, new Promise(function (resolve) {
                                 var utxos = new Array();
                                 for (var _i = 0, utxoAll_1 = utxoAll; _i < utxoAll_1.length; _i++) {
-                                    var utxo_1 = utxoAll_1[_i];
-                                    if (utxo_1.Asset && utxo_1.Asset.Tkn) {
-                                        var tkn = utxo_1.Asset.Tkn;
-                                        if (utils_1.hexToCy(tkn.Currency) === currency) {
-                                            var now = new Date().getTime();
-                                            var latest = utxo_1["timestamp"];
-                                            if (latest && now - latest < 12 * 15 * 1000) {
-                                                continue;
-                                            }
-                                            //set utxo has used
-                                            utxo_1["timestamp"] = now;
-                                            db.get(accountKey).update(tables_1.tables.utxo.name, utxo_1);
-                                            utxos.push(utxo_1);
-                                            var amount = utils_1.default.toBN(tkn.Value);
-                                            remain = remain.sub(amount);
-                                            if (remain.isNeg() || remain.isZero()) {
-                                                break;
+                                    var utxo_2 = utxoAll_1[_i];
+                                    if (utxo_2.Asset && utxo_2.Asset.Tkn) {
+                                        var tkn = utxo_2.Asset.Tkn;
+                                        if (tkn) {
+                                            if (utils_1.hexToCy(tkn.Currency) === currency) {
+                                                var now = new Date().getTime();
+                                                var latest = utxo_2["timestamp"];
+                                                if (latest && now - latest < 12 * 14 * 1000) {
+                                                    continue;
+                                                }
+                                                // set utxo has used
+                                                utxos.push(utxo_2);
+                                                var amount = utils_1.default.toBN(tkn.Value);
+                                                remain = remain.sub(amount);
+                                                if (remain.isNeg() || remain.isZero()) {
+                                                    break;
+                                                }
                                             }
                                         }
                                     }
@@ -300,8 +399,36 @@ var TxGenerator = /** @class */ (function () {
         });
     };
     TxGenerator.prototype.findRootsByTicket = function (accountKey, tickets) {
-        return new Promise(function (resolve) {
-            resolve({ utxos: [], remain: new Map() });
+        return __awaiter(this, void 0, void 0, function () {
+            var utxos, dbEntries, dbRes, value, rests, utxoTkts;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        utxos = new Array();
+                        if (!(tickets && tickets.size > 0)) return [3 /*break*/, 5];
+                        dbEntries = tickets.entries();
+                        dbRes = dbEntries.next();
+                        _a.label = 1;
+                    case 1:
+                        if (!!dbRes.done) return [3 /*break*/, 5];
+                        value = dbRes.value[0];
+                        return [4 /*yield*/, db.get(accountKey).select(tables_1.tables.tickets.name, { Value: value })];
+                    case 2:
+                        rests = _a.sent();
+                        if (!(rests && rests.length > 0)) return [3 /*break*/, 4];
+                        return [4 /*yield*/, db.get(accountKey).select(tables_1.tables.utxoTkt.name, { Root: rests[0].Root })];
+                    case 3:
+                        utxoTkts = _a.sent();
+                        utxos.push(utxoTkts[0]);
+                        _a.label = 4;
+                    case 4:
+                        dbRes = dbEntries.next();
+                        return [3 /*break*/, 1];
+                    case 5: return [2 /*return*/, new Promise(function (resolve) {
+                            resolve({ utxos: utxos, remain: new Map() });
+                        })];
+                }
+            });
         });
     };
     TxGenerator.prototype.getRoot = function (root) {
@@ -365,15 +492,21 @@ function getPKrIndex(message) {
 }
 // === message
 function healthyCheck(message) {
+    var health = false;
     if (!latestSyncTime) {
-        message.data = { health: false, latestSyncTime: latestSyncTime, isSyncing: isSyncing };
-        _postMessage(message);
     }
     else {
         var now = new Date().getTime();
-        message.data = { health: (now - latestSyncTime) < 60 * 1000, latestSyncTime: latestSyncTime, isSyncing: isSyncing };
-        _postMessage(message);
+        health = (now - latestSyncTime) < 60 * 1000;
     }
+    var tk = message.data;
+    db.get(tk).selectId(tables_1.tables.syncInfo.name, 1).then(function (info) {
+        message.data = { health: health, latestSyncTime: latestSyncTime, isSyncing: isSyncing.get(tk), latestBlock: info.CurrentBlock, pkrIndex: info.PkrIndex };
+        _postMessage(message);
+    }).catch(function (error) {
+        message.data = { health: health, latestSyncTime: latestSyncTime, isSyncing: isSyncing.get(tk), latestBlock: 0, pkrIndex: 1 };
+        _postMessage(message);
+    });
 }
 function getTxList(message) {
     _getTxList(message).then(function (rest) {
@@ -394,28 +527,31 @@ function _genTxInfo(txBases, txInfo, cy) {
                 var txBase = txBases_1[_i];
                 if (txBase.Asset && txBase.Asset.Tkn) {
                     var tkn = txBase.Asset.Tkn;
-                    if (!cy || cy && utils_1.hexToCy(tkn.Currency) === cy) {
-                        var amount = new bignumber_js_1.default(tkn.Value);
-                        if (txBase.TxType === tables_1.TxType.out) {
-                            amount = amount.multipliedBy(-1);
-                        }
-                        if (TknMap.has(utils_1.hexToCy(tkn.Currency))) {
-                            var amountStr = amount.plus(new bignumber_js_1.default(TknMap.get(utils_1.hexToCy(tkn.Currency)))).toString(10);
-                            TknMap.set(utils_1.hexToCy(tkn.Currency), amountStr);
-                        }
-                        else {
-                            TknMap.set(utils_1.hexToCy(tkn.Currency), amount.toString(10));
+                    if (tkn) {
+                        if (!cy || cy && utils_1.hexToCy(tkn.Currency) === cy) {
+                            var amount = new bignumber_js_1.default(tkn.Value);
+                            if (txBase.TxType === tables_1.TxType.out) {
+                                amount = amount.multipliedBy(-1);
+                            }
+                            if (TknMap.has(utils_1.hexToCy(tkn.Currency))) {
+                                var amountStr = amount.plus(new bignumber_js_1.default(TknMap.get(utils_1.hexToCy(tkn.Currency)))).toString(10);
+                                TknMap.set(utils_1.hexToCy(tkn.Currency), amountStr);
+                            }
+                            else {
+                                TknMap.set(utils_1.hexToCy(tkn.Currency), amount.toString(10));
+                            }
                         }
                     }
                 }
                 if (txBase.Asset && txBase.Asset.Tkt) {
+                    var key = utils_1.hexToCy(txBase.Asset.Tkt.Category);
                     if (TktMap.has(txBase.Asset.Tkt)) {
-                        var val = TktMap.get(txBase.Asset.Tkt.Category);
+                        var val = TktMap.get(key);
                         // @ts-ignore
-                        TktMap.set(txBase.Asset.Tkt.Category, val.push(txBase.Asset.Tkt.Value));
+                        TktMap.set(key, val.push(txBase.Asset.Tkt.Value));
                     }
                     else {
-                        TktMap.set(txBase.Asset.Tkt.Category, [txBase.Asset.Tkt.Value]);
+                        TktMap.set(key, [txBase.Asset.Tkt.Value]);
                     }
                 }
             }
@@ -577,69 +713,102 @@ function initAccount(message) {
     }
 }
 function clearData(message) {
-    _clearData().then(function (data) {
-        isSyncing = false;
+    _clearData(message.data).then(function (data) {
+        console.log("data>>> ", data);
+        isSyncing.clear();
         message.data = "Success";
         _postMessage(message);
     }).catch(function (e) {
-        isSyncing = false;
-        message.error = e.message;
+        console.log("data e>>> ", e);
+        isSyncing.clear();
+        message.error = e;
         _postMessage(message);
     });
 }
-function _clearData() {
+function _clearData(tk) {
     return __awaiter(this, void 0, void 0, function () {
-        var dbEntries, dbRes, _db, info;
+        function _clear(_db) {
+            return __awaiter(this, void 0, void 0, function () {
+                var info, _isSyncing;
+                return __generator(this, function (_a) {
+                    switch (_a.label) {
+                        case 0: return [4 /*yield*/, _db.selectId(tables_1.tables.syncInfo.name, 1)];
+                        case 1:
+                            info = _a.sent();
+                            _isSyncing = isSyncing.get(info.TK);
+                            if (!(_isSyncing === true)) return [3 /*break*/, 3];
+                            return [4 /*yield*/, new Promise(function (resolve, reject) { reject("Data synchronization ..."); })];
+                        case 2:
+                            _a.sent();
+                            return [3 /*break*/, 15];
+                        case 3:
+                            isSyncing.set(tk, true);
+                            assets.delete(tk);
+                            info.CurrentBlock = 0;
+                            info.PKr = info.MainPKr;
+                            info.PkrIndex = 1;
+                            info.UseHashPKr = false;
+                            return [4 /*yield*/, _db.update(tables_1.tables.syncInfo.name, info)];
+                        case 4:
+                            _a.sent();
+                            return [4 /*yield*/, _db.clearTable(tables_1.tables.utxo.name)];
+                        case 5:
+                            _a.sent();
+                            return [4 /*yield*/, _db.clearTable(tables_1.tables.txBase.name)];
+                        case 6:
+                            _a.sent();
+                            return [4 /*yield*/, _db.clearTable(tables_1.tables.assets.name)];
+                        case 7:
+                            _a.sent();
+                            return [4 /*yield*/, _db.clearTable(tables_1.tables.assetUtxo.name)];
+                        case 8:
+                            _a.sent();
+                            return [4 /*yield*/, _db.clearTable(tables_1.tables.tx.name)];
+                        case 9:
+                            _a.sent();
+                            return [4 /*yield*/, _db.clearTable(tables_1.tables.nils.name)];
+                        case 10:
+                            _a.sent();
+                            return [4 /*yield*/, _db.clearTable(tables_1.tables.txCurrency.name)];
+                        case 11:
+                            _a.sent();
+                            return [4 /*yield*/, _db.clearTable(tables_1.tables.utxoTkt.name)];
+                        case 12:
+                            _a.sent();
+                            return [4 /*yield*/, _db.clearTable(tables_1.tables.tickets.name)];
+                        case 13:
+                            _a.sent();
+                            return [4 /*yield*/, new Promise(function (resolve) { resolve("Clear Data Success !"); })];
+                        case 14:
+                            _a.sent();
+                            _a.label = 15;
+                        case 15: return [2 /*return*/];
+                    }
+                });
+            });
+        }
+        var dbEntries, dbRes, _db;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
-                    if (!(isSyncing === false)) return [3 /*break*/, 12];
-                    isSyncing = true;
+                    if (!tk) return [3 /*break*/, 2];
+                    return [4 /*yield*/, _clear(db.get(tk))];
+                case 1:
+                    _a.sent();
+                    return [3 /*break*/, 5];
+                case 2:
                     dbEntries = db.entries();
                     dbRes = dbEntries.next();
-                    _a.label = 1;
-                case 1:
-                    if (!!dbRes.done) return [3 /*break*/, 11];
-                    _db = dbRes.value[1];
-                    return [4 /*yield*/, _db.clearTable(tables_1.tables.utxo.name)];
-                case 2:
-                    _a.sent();
-                    return [4 /*yield*/, _db.clearTable(tables_1.tables.txBase.name)];
+                    _a.label = 3;
                 case 3:
-                    _a.sent();
-                    return [4 /*yield*/, _db.clearTable(tables_1.tables.assets.name)];
+                    if (!!dbRes.done) return [3 /*break*/, 5];
+                    _db = dbRes.value[1];
+                    return [4 /*yield*/, _clear(_db)];
                 case 4:
                     _a.sent();
-                    return [4 /*yield*/, _db.clearTable(tables_1.tables.assetUtxo.name)];
-                case 5:
-                    _a.sent();
-                    return [4 /*yield*/, _db.clearTable(tables_1.tables.tx.name)];
-                case 6:
-                    _a.sent();
-                    return [4 /*yield*/, _db.clearTable(tables_1.tables.nils.name)];
-                case 7:
-                    _a.sent();
-                    return [4 /*yield*/, _db.clearTable(tables_1.tables.txCurrency.name)];
-                case 8:
-                    _a.sent();
-                    return [4 /*yield*/, _db.selectId(tables_1.tables.syncInfo.name, 1)];
-                case 9:
-                    info = _a.sent();
-                    info.CurrentBlock = 0;
-                    info.PKr = info.MainPKr;
-                    info.PkrIndex = 1;
-                    info.UseHashPKr = false;
-                    return [4 /*yield*/, _db.update(tables_1.tables.syncInfo.name, info)];
-                case 10:
-                    _a.sent();
                     dbRes = dbEntries.next();
-                    return [3 /*break*/, 1];
-                case 11: return [2 /*return*/, new Promise(function (resolve) {
-                        resolve("Data clear success!");
-                    })];
-                case 12: return [2 /*return*/, new Promise(function (resolve, reject) {
-                        reject("Data synchronization...");
-                    })];
+                    return [3 /*break*/, 3];
+                case 5: return [2 /*return*/];
             }
         });
     });
@@ -651,13 +820,19 @@ function balancesOf(message) {
     if (!db) {
         return;
     }
-    if (db.get(tk)) {
-        _getBalance();
+    if (isSyncing.get(tk) === true && assets.get(tk)) { //get cache assets
+        message.data = assets.get(tk);
+        _postMessage(message);
     }
     else {
-        setTimeout(function () {
+        if (db.get(tk)) {
             _getBalance();
-        }, 1000);
+        }
+        else {
+            setTimeout(function () {
+                _getBalance();
+            }, 500);
+        }
     }
     function _getBalance() {
         db.get(tk).selectAll(tables_1.tables.assets.name).then(function (rest) {
@@ -668,6 +843,7 @@ function balancesOf(message) {
                 });
             }
             message.data = TknRet;
+            assets.set(tk, TknRet);
             _postMessage(message);
         }).catch(function (err) {
             message.error = err.message;
@@ -675,8 +851,29 @@ function balancesOf(message) {
         });
     }
 }
-function ticketsOf(tk) {
-    return { method: types_1.Method.BalanceOf, data: "success", error: null };
+function ticketsOf(message) {
+    var tk = message.data;
+    db.get(tk).selectAll(tables_1.tables.tickets.name).then(function (rests) {
+        var utxoMap = new Map();
+        for (var _i = 0, rests_1 = rests; _i < rests_1.length; _i++) {
+            var data = rests_1[_i];
+            var key = utils_1.hexToCy(data.Category);
+            var value = data.Value;
+            if (utxoMap.has(key)) {
+                var o = utxoMap.get(key);
+                o.push(value);
+                utxoMap.set(key, o);
+            }
+            else {
+                utxoMap.set(key, [value]);
+            }
+        }
+        message.data = utxoMap;
+        _postMessage(message);
+    }).catch(function (e) {
+        message.error = typeof e == 'string' ? e : e.message;
+        _postMessage(message);
+    });
 }
 function init(message) {
     var initParam = message.data;
@@ -689,7 +886,6 @@ function init(message) {
     if (syncIntervalId) {
         clearInterval(syncIntervalId);
     }
-    isSyncing = false;
     _startSync();
     message.data = "success";
     _postMessage(message);
@@ -700,44 +896,66 @@ function _postMessage(message) {
     self.postMessage(message);
 }
 function _startSync() {
+    _inner();
     syncIntervalId = setInterval(function () {
         // console.log("======= start sync data,isSyncing=",isSyncing);
-        if (!isSyncing) {
-            fetchHandler().then(function (flag) {
-                // console.log("======= fetchHandler flag>>> ",flag);
-            }).catch(function (error) {
-                // console.log("======= fetchHandler error>>> ",error);
-                isSyncing = false;
-            });
-            // console.log("======= end sync data",isSyncing);
-        }
-        _setLatestSyncTime();
+        _inner();
     }, syncTime);
+    function _inner() {
+        fetchHandler().then(function (flag) {
+        }).catch(function (e) {
+            var syncEntries = isSyncing.entries();
+            var syncRes = syncEntries.next();
+            while (!syncRes.done) {
+                if (syncRes.value[1]) {
+                    console.log("======= recover syncing state >>> ", syncRes.value[0], false);
+                    isSyncing.set(syncRes.value[0], false);
+                }
+                syncRes = syncEntries.next();
+            }
+            console.log("======= fetchHandler error>>> ", e);
+            var err = typeof e === 'string' ? e : e.message;
+            sendLog("Fetch Error:", err);
+        });
+        _setLatestSyncTime();
+    }
 }
 function fetchHandler() {
     return __awaiter(this, void 0, void 0, function () {
-        var dbEntries, dbRes, _db;
+        var syncEntries, syncRes, dbEntries, dbRes, _db, info;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
+                    syncEntries = isSyncing.entries();
+                    syncRes = syncEntries.next();
+                    while (!syncRes.done) {
+                        if (syncRes.value[1]) {
+                            return [2 /*return*/, new Promise(function (resolve) { resolve(); })];
+                        }
+                        syncRes = syncEntries.next();
+                    }
                     dbEntries = db.entries();
                     dbRes = dbEntries.next();
-                    isSyncing = true;
                     _a.label = 1;
                 case 1:
-                    if (!!dbRes.done) return [3 /*break*/, 3];
+                    if (!!dbRes.done) return [3 /*break*/, 4];
                     _db = dbRes.value[1];
-                    return [4 /*yield*/, _fetchOuts(_db)];
+                    return [4 /*yield*/, _db.selectId(tables_1.tables.syncInfo.name, 1)];
                 case 2:
+                    info = _a.sent();
+                    if (isSyncing.get(info.TK) === true) {
+                        return [3 /*break*/, 1];
+                    }
+                    isSyncing.set(info.TK, true);
+                    return [4 /*yield*/, _fetchOuts(_db, info)];
+                case 3:
                     _a.sent();
+                    isSyncing.set(info.TK, false);
                     dbRes = dbEntries.next();
                     return [3 /*break*/, 1];
-                case 3:
-                    isSyncing = false;
-                    // console.log("======= set isSyncing end ",isSyncing);
-                    return [2 /*return*/, new Promise(function (resolve) {
-                            resolve(isSyncing);
-                        })];
+                case 4: return [2 /*return*/, new Promise(function (resolve) {
+                        resolve(isSyncing);
+                    })];
             }
         });
     });
@@ -784,6 +1002,7 @@ function changeAssets(assets, utxo, db, txType) {
                     return [4 /*yield*/, db.update(tables_1.tables.assetUtxo.name, aUtxo)];
                 case 8:
                     _a.sent();
+                    if (!utxo.Asset.Tkn) return [3 /*break*/, 10];
                     amount = utxo.Asset.Tkn.Value;
                     if (txType === tables_1.TxType.out) {
                         amount = new bignumber_js_1.default(utxo.Asset.Tkn.Value).multipliedBy(-1).toString(10);
@@ -821,231 +1040,265 @@ function _deletePending(db, txData) {
         console.log(err.message);
     });
 }
-function _fetchOuts(db) {
+function _fetchOuts(db, info) {
     return __awaiter(this, void 0, void 0, function () {
-        var infos, _i, infos_1, info, syncInfo, start, end, rtn, _a, _b, utxo_2, currency, assets, _c, _d, nil, nils, _e, _f, txData, version, isNew;
-        return __generator(this, function (_g) {
-            switch (_g.label) {
+        var syncInfo, start, end, pkrIndex, rtn, version, isNew;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
                 case 0:
                     if (!db) {
-                        return [2 /*return*/];
+                        return [2 /*return*/, new Promise(function (resolve, reject) { reject("POPDB not init"); })];
                     }
-                    return [4 /*yield*/, db.selectAll(tables_1.tables.syncInfo.name)];
-                case 1:
-                    infos = _g.sent();
-                    _i = 0, infos_1 = infos;
-                    _g.label = 2;
-                case 2:
-                    if (!(_i < infos_1.length)) return [3 /*break*/, 22];
-                    info = infos_1[_i];
                     syncInfo = info;
-                    start = 0;
+                    start = info.CurrentBlock;
                     end = null;
-                    _g.label = 3;
+                    pkrIndex = info.PkrIndex;
+                    _a.label = 1;
+                case 1:
+                    if (!true) return [3 /*break*/, 7];
+                    return [4 /*yield*/, fetchAndIndex(info.TK, pkrIndex, info.UseHashPKr, start, end)];
+                case 2:
+                    rtn = _a.sent();
+                    return [4 /*yield*/, _indexUtxos(rtn, info.TK, db)];
                 case 3:
-                    if (!true) return [3 /*break*/, 18];
-                    if (!info.CurrentBlock || info.CurrentBlock === 0) {
+                    _a.sent();
+                    if (rtn.useHashPKr) {
+                        syncInfo.UseHashPKr = true;
                     }
-                    else {
-                        start = info.CurrentBlock;
+                    if (!(rtn.again === true)) return [3 /*break*/, 5];
+                    syncInfo.PkrIndex = syncInfo.PkrIndex + 1;
+                    version = 1;
+                    isNew = utils_1.isNewVersion(utils_1.default.toBuffer(info.TK));
+                    if (isNew) {
+                        version = 2;
                     }
-                    return [4 /*yield*/, fetchAndIndex(info.TK, info.PkrIndex, info.UseHashPKr, start, end)];
+                    syncInfo.PKr = jsuperzk.createPkrHash(info.TK, syncInfo.PkrIndex, version);
+                    end = rtn.lastBlockNumber;
+                    pkrIndex = syncInfo.PkrIndex;
+                    syncInfo.CurrentBlock = rtn.lastBlockNumber;
+                    return [4 /*yield*/, db.update(tables_1.tables.syncInfo.name, syncInfo)];
                 case 4:
-                    rtn = _g.sent();
-                    if (!(rtn.utxos && rtn.utxos.length > 0)) return [3 /*break*/, 13];
-                    _a = 0, _b = rtn.utxos;
-                    _g.label = 5;
+                    _a.sent();
+                    return [3 /*break*/, 6];
                 case 5:
-                    if (!(_a < _b.length)) return [3 /*break*/, 13];
-                    utxo_2 = _b[_a];
-                    utxo_2["TK"] = info.TK;
-                    currency = utils_1.default.hexToCy(utxo_2.Asset.Tkn.Currency);
-                    return [4 /*yield*/, db.select(tables_1.tables.assets.name, { Currency: currency })];
-                case 6:
-                    assets = _g.sent();
-                    return [4 /*yield*/, db.update(tables_1.tables.utxo.name, utxo_2)];
-                case 7:
-                    _g.sent();
-                    return [4 /*yield*/, changeAssets(assets, utxo_2, db, tables_1.TxType.in)];
+                    latestBlock = rtn.lastBlockNumber;
+                    syncInfo.CurrentBlock = rtn.lastBlockNumber;
+                    return [3 /*break*/, 7];
+                case 6: return [3 /*break*/, 1];
+                case 7: return [4 /*yield*/, db.update(tables_1.tables.syncInfo.name, syncInfo)];
                 case 8:
-                    _g.sent();
-                    if (!utxo_2.Nils) return [3 /*break*/, 12];
-                    _c = 0, _d = utxo_2.Nils;
-                    _g.label = 9;
+                    _a.sent();
+                    return [4 /*yield*/, _checkNil(info.TK)
+                        // await _repair(db)
+                    ];
                 case 9:
-                    if (!(_c < _d.length)) return [3 /*break*/, 12];
-                    nil = _d[_c];
-                    nils = { Nil: nil, Root: utxo_2.Root };
+                    _a.sent();
+                    return [2 /*return*/];
+            }
+        });
+    });
+}
+function _indexUtxos(rtn, tk, db) {
+    return __awaiter(this, void 0, void 0, function () {
+        var _i, _a, utxo_3, _b, _c, nil, nils, currency, assets_1, data, _d, _e, txData;
+        return __generator(this, function (_f) {
+            switch (_f.label) {
+                case 0:
+                    if (!(rtn.utxos && rtn.utxos.length > 0)) return [3 /*break*/, 13];
+                    _i = 0, _a = rtn.utxos;
+                    _f.label = 1;
+                case 1:
+                    if (!(_i < _a.length)) return [3 /*break*/, 13];
+                    utxo_3 = _a[_i];
+                    utxo_3["TK"] = tk;
+                    if (!utxo_3.Nils) return [3 /*break*/, 5];
+                    _b = 0, _c = utxo_3.Nils;
+                    _f.label = 2;
+                case 2:
+                    if (!(_b < _c.length)) return [3 /*break*/, 5];
+                    nil = _c[_b];
+                    nils = { Nil: nil, Root: utxo_3.Root };
                     return [4 /*yield*/, db.update(tables_1.tables.nils.name, nils)];
+                case 3:
+                    _f.sent();
+                    _f.label = 4;
+                case 4:
+                    _b++;
+                    return [3 /*break*/, 2];
+                case 5:
+                    if (!utxo_3.Asset.Tkn) return [3 /*break*/, 9];
+                    return [4 /*yield*/, db.update(tables_1.tables.utxo.name, utxo_3)];
+                case 6:
+                    _f.sent();
+                    currency = utils_1.default.hexToCy(utxo_3.Asset.Tkn.Currency);
+                    return [4 /*yield*/, db.select(tables_1.tables.assets.name, { Currency: currency })];
+                case 7:
+                    assets_1 = _f.sent();
+                    return [4 /*yield*/, changeAssets(assets_1, utxo_3, db, tables_1.TxType.in)];
+                case 8:
+                    _f.sent();
+                    _f.label = 9;
+                case 9:
+                    if (!utxo_3.Asset.Tkt) return [3 /*break*/, 12];
+                    data = utxo_3;
+                    return [4 /*yield*/, db.update(tables_1.tables.utxoTkt.name, data)];
                 case 10:
-                    _g.sent();
-                    _g.label = 11;
+                    _f.sent();
+                    console.log("indexTickets>> ", { Root: data.Root, Value: utxo_3.Asset.Tkt.Value, Category: utxo_3.Asset.Tkt.Category });
+                    return [4 /*yield*/, db.update(tables_1.tables.tickets.name, { Root: data.Root, Value: utxo_3.Asset.Tkt.Value, Category: utxo_3.Asset.Tkt.Category })];
                 case 11:
-                    _c++;
-                    return [3 /*break*/, 9];
+                    _f.sent();
+                    _f.label = 12;
                 case 12:
-                    _a++;
-                    return [3 /*break*/, 5];
+                    _i++;
+                    return [3 /*break*/, 1];
                 case 13:
                     if (!(rtn.txInfos && rtn.txInfos.length > 0)) return [3 /*break*/, 17];
-                    _e = 0, _f = rtn.txInfos;
-                    _g.label = 14;
+                    _d = 0, _e = rtn.txInfos;
+                    _f.label = 14;
                 case 14:
-                    if (!(_e < _f.length)) return [3 /*break*/, 17];
-                    txData = _f[_e];
-                    txData.TK = info.TK;
+                    if (!(_d < _e.length)) return [3 /*break*/, 17];
+                    txData = _e[_d];
+                    txData.TK = tk;
                     txData.Num_TxHash = txData.Num + "_" + txData.TxHash;
                     _deletePending(db, txData);
                     return [4 /*yield*/, db.update(tables_1.tables.tx.name, txData)];
                 case 15:
-                    _g.sent();
-                    _g.label = 16;
+                    _f.sent();
+                    _f.label = 16;
                 case 16:
-                    _e++;
+                    _d++;
                     return [3 /*break*/, 14];
-                case 17:
-                    if (rtn.useHashPKr) {
-                        syncInfo.UseHashPKr = true;
-                    }
-                    if (rtn.again === true) {
-                        syncInfo.PkrIndex = syncInfo.PkrIndex + 1;
-                        version = 1;
-                        isNew = utils_1.isNewVersion(utils_1.default.toBuffer(info.TK));
-                        if (isNew) {
-                            version = 2;
-                        }
-                        syncInfo.PKr = jsuperzk.createPkrHash(info.TK, syncInfo.PkrIndex, version);
-                        end = rtn.lastBlockNumber;
-                    }
-                    else {
-                        syncInfo.CurrentBlock = rtn.lastBlockNumber + 1;
-                        return [3 /*break*/, 18];
-                    }
-                    return [3 /*break*/, 3];
-                case 18: return [4 /*yield*/, db.update(tables_1.tables.syncInfo.name, syncInfo)];
-                case 19:
-                    _g.sent();
-                    return [4 /*yield*/, _checkNil(info.TK)];
-                case 20:
-                    _g.sent();
-                    _g.label = 21;
-                case 21:
-                    _i++;
-                    return [3 /*break*/, 2];
-                case 22: return [2 /*return*/];
+                case 17: return [2 /*return*/];
             }
         });
     });
 }
 function fetchAndIndex(tk, pkrIndex, useHashPkr, start, end) {
-    // console.log("fetchAndIndex>>>> ",pkrIndex,useHashPkr,start,end);
-    return new Promise(function (resolve, reject) {
-        var pkrRest = genPKrs(tk, pkrIndex, useHashPkr);
-        var param = [];
-        if (end && end > 0) {
-            var currentPkr_1 = [];
-            pkrRest.CurrentPKrMap.forEach((function (value, key) {
-                currentPkr_1.push(key);
-            }));
-            param = [currentPkr_1, start, end];
-        }
-        else {
-            param = [pkrRest.PKrs, start, null];
-        }
-        jsonRpcReq("light_getOutsByPKr", param).then(function (response) {
-            // @ts-ignore
-            var data = response.data;
-            var rest = {
-                utxos: null,
-                again: false,
-                useHashPKr: false,
-                remoteNum: 0,
-                nextNum: 0,
-                lastBlockNumber: 0,
-                txInfos: null
-            };
-            var hasResWithHashPkr = false;
-            var hasResWithOldPkr = false;
-            if (data.result) {
-                var lastBlockNumber_1 = start;
-                var blocks = data.result.BlockOuts;
-                var outs_1 = [];
-                var txInfos_1 = [];
-                var Utxos_1 = [];
-                if (blocks && blocks.length > 0) {
-                    blocks.forEach(function (block, index) {
-                        lastBlockNumber_1 = Math.max(block.Num, lastBlockNumber_1);
-                        var blockDatas = block.Data;
-                        blockDatas.forEach(function (blockData, index) {
-                            outs_1.push(blockData.Out);
-                            var txInfo = blockData.TxInfo;
-                            var utxos = jsuperzk.decOut(tk, [blockData.Out]);
-                            txInfo.Root = blockData.Out.Root;
-                            var txBase = {
-                                TxHash: txInfo.TxHash,
-                                TxType: tables_1.TxType.in,
-                                Root: blockData.Out.Root,
-                                Asset: utxos[0].Asset,
-                                TxHash_Root_TxType: [txInfo.TxHash, txInfo.Root, tables_1.TxType.in].join("_"),
-                                Num_TxHash: [txInfo.Num, txInfo.TxHash].join("_"),
-                            };
-                            txInfos_1.push(txInfo);
-                            if (utxos[0].Asset && utxos[0].Asset.Tkn) {
-                                var cy = utils_1.default.hexToCy(utxos[0].Asset.Tkn.Currency);
-                                var txCurrency = {
-                                    Num: txInfo.Num,
-                                    TxHash: txInfo.TxHash,
-                                    Currency: cy,
-                                    id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
-                                };
-                                db.get(tk).update(tables_1.tables.txCurrency.name, txCurrency).then(function (rest) {
-                                    console.log("index txCurrency success");
-                                }).catch(function (err) {
-                                    console.log(err);
-                                });
+    return __awaiter(this, void 0, void 0, function () {
+        var pkrRest, param, currentPkr_1, response, data, rest, hasResWithHashPkr, hasResWithOldPkr, blocks, outs, txInfos, Utxos, _i, blocks_1, block, blockDatas, _a, blockDatas_1, blockData, txInfo, utxos, txBase, cy, txCurrency, _b, Utxos_1, utxo_4;
+        return __generator(this, function (_c) {
+            switch (_c.label) {
+                case 0:
+                    pkrRest = genPKrs(tk, pkrIndex, useHashPkr);
+                    param = [];
+                    if (end && end > 0) {
+                        currentPkr_1 = [];
+                        pkrRest.CurrentPKrMap.forEach((function (value, key) {
+                            currentPkr_1.push(key);
+                        }));
+                        param = [currentPkr_1, start, end];
+                    }
+                    else {
+                        param = [pkrRest.PKrs, start, null];
+                    }
+                    sendLog("(" + pkrRest.pkrMain + ")Fetch", JSON.stringify({ pkrIndex: pkrIndex, start: start }));
+                    return [4 /*yield*/, jsonRpcReq("light_getOutsByPKr", param)];
+                case 1:
+                    response = _c.sent();
+                    data = response.data;
+                    rest = {
+                        utxos: null,
+                        again: false,
+                        useHashPKr: false,
+                        remoteNum: 0,
+                        nextNum: 0,
+                        lastBlockNumber: 0,
+                        txInfos: null
+                    };
+                    hasResWithHashPkr = false;
+                    hasResWithOldPkr = false;
+                    if (!data.result) return [3 /*break*/, 10];
+                    blocks = data.result.BlockOuts;
+                    outs = [];
+                    txInfos = [];
+                    Utxos = [];
+                    if (!(blocks && blocks.length > 0)) return [3 /*break*/, 9];
+                    _i = 0, blocks_1 = blocks;
+                    _c.label = 2;
+                case 2:
+                    if (!(_i < blocks_1.length)) return [3 /*break*/, 9];
+                    block = blocks_1[_i];
+                    blockDatas = block.Data;
+                    _a = 0, blockDatas_1 = blockDatas;
+                    _c.label = 3;
+                case 3:
+                    if (!(_a < blockDatas_1.length)) return [3 /*break*/, 8];
+                    blockData = blockDatas_1[_a];
+                    outs.push(blockData.Out);
+                    txInfo = blockData.TxInfo;
+                    utxos = jsuperzk.decOut(tk, [blockData.Out]);
+                    txInfo.Root = blockData.Out.Root;
+                    txBase = {
+                        TxHash: txInfo.TxHash,
+                        TxType: tables_1.TxType.in,
+                        Root: blockData.Out.Root,
+                        Asset: utxos[0].Asset,
+                        TxHash_Root_TxType: [txInfo.TxHash, txInfo.Root, tables_1.TxType.in].join("_"),
+                        Num_TxHash: [txInfo.Num, txInfo.TxHash].join("_"),
+                    };
+                    txInfos.push(txInfo);
+                    if (!(utxos[0].Asset && utxos[0].Asset.Tkn)) return [3 /*break*/, 5];
+                    cy = utils_1.default.hexToCy(utxos[0].Asset.Tkn.Currency);
+                    txCurrency = {
+                        Num: txInfo.Num,
+                        TxHash: txInfo.TxHash,
+                        Currency: cy,
+                        id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
+                    };
+                    return [4 /*yield*/, db.get(tk).update(tables_1.tables.txCurrency.name, txCurrency)];
+                case 4:
+                    _c.sent();
+                    sendLog("(" + pkrRest.pkrMain + ") AddTx", JSON.stringify({ Block: txCurrency.Num, TxHash: txCurrency.TxHash }));
+                    _c.label = 5;
+                case 5: return [4 /*yield*/, db.get(tk).update(tables_1.tables.txBase.name, txBase)];
+                case 6:
+                    _c.sent();
+                    Utxos = Utxos.concat(utxos);
+                    _c.label = 7;
+                case 7:
+                    _a++;
+                    return [3 /*break*/, 3];
+                case 8:
+                    _i++;
+                    return [3 /*break*/, 2];
+                case 9:
+                    for (_b = 0, Utxos_1 = Utxos; _b < Utxos_1.length; _b++) {
+                        utxo_4 = Utxos_1[_b];
+                        if (pkrRest.CurrentPKrMap.has(utxo_4.Pkr)) {
+                            rest.again = true;
+                        }
+                        if (!useHashPkr) {
+                            if (pkrRest.PKrTypeMap.get(utxo_4.Pkr) === PKrType.New) {
+                                hasResWithHashPkr = true;
                             }
-                            db.get(tk).update(tables_1.tables.txBase.name, txBase).then(function (rest) {
-                                console.log("index txInfo success");
-                            }).catch(function (err) {
-                                console.log(err);
-                            });
-                            Utxos_1 = Utxos_1.concat(utxos);
-                        });
-                    });
-                }
-                Utxos_1.forEach(function (utxo) {
-                    if (pkrRest.CurrentPKrMap.has(utxo.Pkr)) {
-                        rest.again = true;
-                    }
-                    if (!useHashPkr) {
-                        if (pkrRest.PKrTypeMap.get(utxo.Pkr) === PKrType.New) {
-                            hasResWithHashPkr = true;
-                        }
-                        else if (pkrRest.PKrTypeMap.get(utxo.Pkr) === PKrType.Old) {
-                            hasResWithOldPkr = true;
+                            else if (pkrRest.PKrTypeMap.get(utxo_4.Pkr) === PKrType.Old) {
+                                hasResWithOldPkr = true;
+                            }
                         }
                     }
-                });
-                rest.txInfos = txInfos_1;
-                rest.utxos = Utxos_1;
-                rest.lastBlockNumber = data.result.CurrentNum;
-                rest.remoteNum = data.result.CurrentNum;
-                if (rest.remoteNum > end) {
-                    rest.nextNum = end + 1;
-                }
-                else {
-                    rest.nextNum = data.result.CurrentNum + 1;
-                }
-                if (!useHashPkr && hasResWithHashPkr && !hasResWithOldPkr) {
-                    rest.useHashPKr = true;
-                }
+                    rest.txInfos = txInfos;
+                    rest.utxos = Utxos;
+                    rest.lastBlockNumber = data.result.CurrentNum;
+                    rest.remoteNum = data.result.CurrentNum;
+                    if (!useHashPkr && hasResWithHashPkr && !hasResWithOldPkr) {
+                        rest.useHashPKr = true;
+                    }
+                    console.log("rest>>>", rest);
+                    return [2 /*return*/, new Promise(function (resolve) {
+                            resolve(rest);
+                        })];
+                case 10: return [2 /*return*/];
             }
-            // console.log("fetchAndIndex result>>>> ",pkrIndex,useHashPkr,start,end,rest);
-            resolve(rest);
-        }).catch(function (reason) {
-            reject(reason);
         });
     });
+}
+function sendLog(operator, content) {
+    var msg = {};
+    msg.type = "ServiceLog";
+    msg.operator = operator;
+    msg.content = content;
+    _postMessage(msg);
 }
 function jsonRpcReq(_method, params) {
     return new Promise(function (resolve, reject) {
@@ -1106,7 +1359,15 @@ function genPKrs(tk, index, useHashPkr) {
             pkrs.push(pkrMainOld);
         }
     }
-    return { PKrTypeMap: pkrTypeMap, CurrentPKrMap: currentPKrMap, PKrs: pkrs };
+    return { PKrTypeMap: pkrTypeMap, CurrentPKrMap: currentPKrMap, PKrs: pkrs, pkrMain: ellipsisHash(pkrMain) };
+}
+function ellipsisHash(value) {
+    try {
+        return value.substring(0, 5) + "..." + value.substring(value.length - 5);
+    }
+    catch (e) {
+        return value;
+    }
 }
 var PKrType;
 (function (PKrType) {
@@ -1115,106 +1376,224 @@ var PKrType;
 })(PKrType || (PKrType = {}));
 function _checkNil(tk) {
     return __awaiter(this, void 0, void 0, function () {
-        var nils, nilArr, _i, nils_1, nil, resp, datas, _a, datas_1, data, txInfo, nil, nilDatas, _b, nilDatas_1, nilData, root, utxos, utxo_3, txBase, currency, assets, cy, txCurrency;
-        return __generator(this, function (_c) {
-            switch (_c.label) {
+        function _innerCheckNil(nilArr) {
+            return __awaiter(this, void 0, void 0, function () {
+                var resp, datas, _i, datas_1, data, txInfo, nil, nilDatas, _a, nilDatas_1, nilData, root, utxos, utxo_5, txBase, currency, assets_2, cy, txCurrency;
+                return __generator(this, function (_b) {
+                    switch (_b.label) {
+                        case 0: return [4 /*yield*/, jsonRpcReq('light_checkNil', [nilArr])
+                            // @ts-ignore
+                        ];
+                        case 1:
+                            resp = _b.sent();
+                            if (!(resp && resp.data && resp.data.result)) return [3 /*break*/, 19];
+                            datas = resp.data.result;
+                            if (!datas) return [3 /*break*/, 19];
+                            _i = 0, datas_1 = datas;
+                            _b.label = 2;
+                        case 2:
+                            if (!(_i < datas_1.length)) return [3 /*break*/, 19];
+                            data = datas_1[_i];
+                            txInfo = data.TxInfo;
+                            nil = { Nil: data.Nil };
+                            txInfo.TK = tk;
+                            txInfo.Num_TxHash = txInfo.Num + "_" + txInfo.TxHash;
+                            _deletePending(db.get(tk), txInfo);
+                            return [4 /*yield*/, db.get(tk).select(tables_1.tables.nils.name, nil)];
+                        case 3:
+                            nilDatas = _b.sent();
+                            if (!(nilDatas && nilDatas.length > 0)) return [3 /*break*/, 16];
+                            _a = 0, nilDatas_1 = nilDatas;
+                            _b.label = 4;
+                        case 4:
+                            if (!(_a < nilDatas_1.length)) return [3 /*break*/, 16];
+                            nilData = nilDatas_1[_a];
+                            return [4 /*yield*/, db.get(tk).delete(tables_1.tables.nils.name, nil)
+                                // @ts-ignore
+                            ];
+                        case 5:
+                            _b.sent();
+                            root = nilData.Root;
+                            return [4 /*yield*/, db.get(tk).select(tables_1.tables.utxo.name, { Root: root })];
+                        case 6:
+                            utxos = _b.sent();
+                            return [4 /*yield*/, db.get(tk).delete(tables_1.tables.tickets.name, { Root: root })];
+                        case 7:
+                            _b.sent();
+                            return [4 /*yield*/, db.get(tk).delete(tables_1.tables.utxoTkt.name, { Root: root })];
+                        case 8:
+                            _b.sent();
+                            if (!utxos) return [3 /*break*/, 15];
+                            utxo_5 = utxos[0];
+                            if (!utxo_5) return [3 /*break*/, 15];
+                            txBase = {
+                                TxHash: txInfo.TxHash,
+                                TxType: tables_1.TxType.out,
+                                Root: root,
+                                // @ts-ignore
+                                Asset: utxo_5.Asset,
+                                TxHash_Root_TxType: [txInfo.TxHash, root, tables_1.TxType.out].join("_"),
+                                Num_TxHash: [txInfo.Num, txInfo.TxHash].join("_"),
+                            };
+                            return [4 /*yield*/, db.get(tk).update(tables_1.tables.txBase.name, txBase)];
+                        case 9:
+                            _b.sent();
+                            if (!utxo_5.Asset.Tkn) return [3 /*break*/, 12];
+                            currency = utils_1.default.hexToCy(utxo_5.Asset.Tkn.Currency);
+                            return [4 /*yield*/, db.get(tk).select(tables_1.tables.assets.name, { Currency: currency })];
+                        case 10:
+                            assets_2 = _b.sent();
+                            return [4 /*yield*/, changeAssets(assets_2, utxo_5, db.get(tk), tables_1.TxType.out)];
+                        case 11:
+                            _b.sent();
+                            _b.label = 12;
+                        case 12: return [4 /*yield*/, db.get(tk).delete(tables_1.tables.utxo.name, { Root: root })];
+                        case 13:
+                            _b.sent();
+                            sendLog("Remove UTXO", JSON.stringify({ Root: root }));
+                            if (!(utxo_5.Asset && utxo_5.Asset.Tkn)) return [3 /*break*/, 15];
+                            cy = utils_1.default.hexToCy(utxo_5.Asset.Tkn.Currency);
+                            txCurrency = {
+                                Num: txInfo.Num,
+                                TxHash: txInfo.TxHash,
+                                Currency: utils_1.default.hexToCy(utxo_5.Asset.Tkn.Currency),
+                                id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
+                            };
+                            return [4 /*yield*/, db.get(tk).update(tables_1.tables.txCurrency.name, txCurrency)];
+                        case 14:
+                            _b.sent();
+                            _b.label = 15;
+                        case 15:
+                            _a++;
+                            return [3 /*break*/, 4];
+                        case 16: return [4 /*yield*/, db.get(tk).update(tables_1.tables.tx.name, txInfo)];
+                        case 17:
+                            _b.sent();
+                            _b.label = 18;
+                        case 18:
+                            _i++;
+                            return [3 /*break*/, 2];
+                        case 19: return [2 /*return*/];
+                    }
+                });
+            });
+        }
+        var nils, nilArr, _i, nils_1, nil;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
                 case 0: return [4 /*yield*/, db.get(tk).selectAll(tables_1.tables.nils.name)];
                 case 1:
-                    nils = _c.sent();
+                    nils = _a.sent();
                     nilArr = new Array();
-                    // @ts-ignore
-                    for (_i = 0, nils_1 = nils; _i < nils_1.length; _i++) {
-                        nil = nils_1[_i];
-                        nilArr.push(nil.Nil);
-                    }
-                    if (!(nilArr && nilArr.length > 0)) return [3 /*break*/, 16];
-                    return [4 /*yield*/, jsonRpcReq('light_checkNil', [nilArr])
-                        // @ts-ignore
-                    ];
+                    _i = 0, nils_1 = nils;
+                    _a.label = 2;
                 case 2:
-                    resp = _c.sent();
-                    if (!(resp && resp.data && resp.data.result)) return [3 /*break*/, 16];
-                    datas = resp.data.result;
-                    if (!datas) return [3 /*break*/, 16];
-                    _a = 0, datas_1 = datas;
-                    _c.label = 3;
+                    if (!(_i < nils_1.length)) return [3 /*break*/, 5];
+                    nil = nils_1[_i];
+                    nilArr.push(nil.Nil);
+                    if (!(nilArr.length >= 1000)) return [3 /*break*/, 4];
+                    return [4 /*yield*/, _innerCheckNil(nilArr)];
                 case 3:
-                    if (!(_a < datas_1.length)) return [3 /*break*/, 16];
-                    data = datas_1[_a];
-                    txInfo = data.TxInfo;
-                    nil = { Nil: data.Nil };
-                    txInfo.TK = tk;
-                    txInfo.Num_TxHash = txInfo.Num + "_" + txInfo.TxHash;
-                    _deletePending(db.get(tk), txInfo);
-                    return [4 /*yield*/, db.get(tk).select(tables_1.tables.nils.name, nil)];
+                    _a.sent();
+                    nilArr = new Array();
+                    _a.label = 4;
                 case 4:
-                    nilDatas = _c.sent();
-                    if (!(nilDatas && nilDatas.length > 0)) return [3 /*break*/, 13];
-                    _b = 0, nilDatas_1 = nilDatas;
-                    _c.label = 5;
+                    _i++;
+                    return [3 /*break*/, 2];
                 case 5:
-                    if (!(_b < nilDatas_1.length)) return [3 /*break*/, 13];
-                    nilData = nilDatas_1[_b];
-                    return [4 /*yield*/, db.get(tk).delete(tables_1.tables.nils.name, nil)
-                        // @ts-ignore
-                    ];
+                    if (!(nilArr && nilArr.length > 0)) return [3 /*break*/, 7];
+                    return [4 /*yield*/, _innerCheckNil(nilArr)];
                 case 6:
-                    _c.sent();
-                    root = nilData.Root;
-                    return [4 /*yield*/, db.get(tk).select(tables_1.tables.utxo.name, { Root: root })];
-                case 7:
-                    utxos = _c.sent();
-                    if (!utxos) return [3 /*break*/, 12];
-                    utxo_3 = utxos[0];
-                    if (!utxo_3) return [3 /*break*/, 12];
-                    txBase = {
-                        TxHash: txInfo.TxHash,
-                        TxType: tables_1.TxType.out,
-                        Root: root,
-                        // @ts-ignore
-                        Asset: utxo_3.Asset,
-                        TxHash_Root_TxType: [txInfo.TxHash, root, tables_1.TxType.out].join("_"),
-                        Num_TxHash: [txInfo.Num, txInfo.TxHash].join("_"),
-                    };
-                    return [4 /*yield*/, db.get(tk).update(tables_1.tables.txBase.name, txBase)];
-                case 8:
-                    _c.sent();
-                    currency = utils_1.default.hexToCy(utxo_3.Asset.Tkn.Currency);
-                    return [4 /*yield*/, db.get(tk).select(tables_1.tables.assets.name, { Currency: currency })];
-                case 9:
-                    assets = _c.sent();
-                    return [4 /*yield*/, changeAssets(assets, utxo_3, db.get(tk), tables_1.TxType.out)];
-                case 10:
-                    _c.sent();
-                    return [4 /*yield*/, db.get(tk).delete(tables_1.tables.utxo.name, { Root: root })];
-                case 11:
-                    _c.sent();
-                    if (utxo_3.Asset && utxo_3.Asset.Tkn) {
-                        cy = utils_1.default.hexToCy(utxo_3.Asset.Tkn.Currency);
-                        txCurrency = {
-                            Num: txInfo.Num,
-                            TxHash: txInfo.TxHash,
-                            Currency: utils_1.default.hexToCy(utxo_3.Asset.Tkn.Currency),
-                            id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
-                        };
-                        db.get(tk).update(tables_1.tables.txCurrency.name, txCurrency).then(function (rest) {
-                            console.log("index txCurrency success");
-                        }).catch(function (err) {
-                            console.log(err);
-                        });
+                    _a.sent();
+                    _a.label = 7;
+                case 7: return [2 /*return*/];
+            }
+        });
+    });
+}
+function repairAssets() {
+    return __awaiter(this, void 0, void 0, function () {
+        var dbEntries, dbRes, _db;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    dbEntries = db.entries();
+                    dbRes = dbEntries.next();
+                    _a.label = 1;
+                case 1:
+                    if (!!dbRes.done) return [3 /*break*/, 3];
+                    _db = dbRes.value[1];
+                    return [4 /*yield*/, _repair(_db)];
+                case 2:
+                    _a.sent();
+                    dbRes = dbEntries.next();
+                    return [3 /*break*/, 1];
+                case 3: return [2 /*return*/];
+            }
+        });
+    });
+}
+function _repair(db) {
+    return __awaiter(this, void 0, void 0, function () {
+        var assetsUtxos, tmpMap, i, assetsUtxo, Tkn, currency, value, asinf, amount, asinf, entry, res, assets_3, asset;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    console.log("Repair Data === ", db.name);
+                    return [4 /*yield*/, db.selectAll(tables_1.tables.assetUtxo.name)];
+                case 1:
+                    assetsUtxos = _a.sent();
+                    tmpMap = new Map();
+                    for (i = 0; i < assetsUtxos.length; i++) {
+                        assetsUtxo = assetsUtxos[i];
+                        Tkn = assetsUtxo.Asset.Tkn;
+                        currency = utils_1.hexToCy(Tkn.Currency);
+                        value = Tkn.Value;
+                        console.log(assetsUtxo.RootType, currency, value);
+                        if (tmpMap.has(currency)) {
+                            asinf = tmpMap.get(currency);
+                            amount = void 0;
+                            if (assetsUtxo.RootType.indexOf("_1") > -1) {
+                                amount = new bignumber_js_1.default(asinf.Amount).minus(new bignumber_js_1.default(value)).toString(10);
+                            }
+                            else {
+                                amount = new bignumber_js_1.default(asinf.Amount).plus(new bignumber_js_1.default(value)).toString(10);
+                            }
+                            asinf.Amount = amount;
+                            tmpMap.set(currency, asinf);
+                        }
+                        else {
+                            asinf = new /** @class */ (function () {
+                                function class_1() {
+                                }
+                                return class_1;
+                            }());
+                            asinf.Currency = currency;
+                            if (assetsUtxo.RootType.indexOf("_1") > -1) {
+                                asinf.Amount = new bignumber_js_1.default(value).multipliedBy(new bignumber_js_1.default(-1)).toString(10);
+                            }
+                            else {
+                                asinf.Amount = value;
+                            }
+                            tmpMap.set(currency, asinf);
+                        }
                     }
-                    _c.label = 12;
-                case 12:
-                    _b++;
-                    return [3 /*break*/, 5];
-                case 13: return [4 /*yield*/, db.get(tk).update(tables_1.tables.tx.name, txInfo)];
-                case 14:
-                    _c.sent();
-                    _c.label = 15;
-                case 15:
-                    _a++;
-                    return [3 /*break*/, 3];
-                case 16: return [2 /*return*/];
+                    entry = tmpMap.entries();
+                    res = entry.next();
+                    _a.label = 2;
+                case 2:
+                    if (!!res.done) return [3 /*break*/, 5];
+                    return [4 /*yield*/, db.select(tables_1.tables.assets.name, { Currency: res.value[0] })];
+                case 3:
+                    assets_3 = _a.sent();
+                    asset = assets_3[0];
+                    asset.Amount = res.value[1].Amount;
+                    return [4 /*yield*/, db.update(tables_1.tables.assets.name, asset)];
+                case 4:
+                    _a.sent();
+                    res = entry.next();
+                    return [3 /*break*/, 2];
+                case 5: return [2 /*return*/];
             }
         });
     });
