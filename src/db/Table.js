@@ -1,6 +1,5 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.Table = void 0;
 var Table = /** @class */ (function () {
     function Table(name, db) {
         this.name = name;

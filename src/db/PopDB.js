@@ -36,7 +36,6 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PopDB = void 0;
 var Table_1 = require("./Table");
 // declare const window: any;
 var PopDB = /** @class */ (function () {

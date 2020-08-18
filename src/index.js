@@ -1,6 +1,5 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PopupService = void 0;
 var types_1 = require("./core/types");
 var assetsWorker;
 var PopupService = /** @class */ (function () {
@@ -68,6 +67,10 @@ var PopupService = /** @class */ (function () {
     };
     PopupService.prototype.getSyncState = function (tk, cb) {
         var message = { method: types_1.Method.HealthyCheck, data: tk };
+        this.handlerMsg(message, cb);
+    };
+    PopupService.prototype.getPendingAndConfirming = function (tk, cb) {
+        var message = { method: types_1.Method.GetPendingAndConfirming, data: tk };
         this.handlerMsg(message, cb);
     };
     PopupService.prototype.handlerMsg = function (message, cb) {

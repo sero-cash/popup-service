@@ -1,6 +1,5 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.Method = void 0;
 //
 // export interface Error {
 //     code: ErrorCode
@@ -24,5 +23,6 @@ var Method;
     Method["GetPKrIndex"] = "getPKrIndex";
     Method["CommitTx"] = "commitTx";
     Method["GetPrice"] = "getPrice";
+    Method["GetPendingAndConfirming"] = "getPendingAndConfirming";
 })(Method = exports.Method || (exports.Method = {}));
 //# sourceMappingURL=types.js.map

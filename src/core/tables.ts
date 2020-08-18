@@ -232,23 +232,6 @@ export interface TxInfo {
 
 }
 
-export interface TxInfo {
-    TK: string
-    TxHash: string
-    Num_TxHash: string
-
-    BlockHash: string
-    From: string
-    Gas: number
-    GasPrice: number
-    GasUsed: number
-    Num: number
-    Time: number
-    To: string
-    State?: string
-
-}
-
 export interface TxBase {
     TxHash: string
     TxType: TxType

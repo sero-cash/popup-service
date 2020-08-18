@@ -15,6 +15,8 @@ import {Asset, Token, Witness, ZPkg} from "jsuperzk/dist/types/types";
 let db: Map<string, PopDB> = new Map<string, PopDB>();
 let assets: Map<string, any> = new Map<string, any>();
 let isSyncing: Map<string,boolean> = new Map<string,boolean>();
+// let isChange: Map<string,boolean> = new Map<string,boolean>();
+let pendingAndConirmMap: Map<string, any> = new Map<string, any>();
 
 let latestSyncTime = new Date().getTime();
 let latestBlock = 0;
@@ -38,6 +40,7 @@ const operations = {
     "getPKrIndex": getPKrIndex,
     "commitTx": commitTx,
     "getSeroPrice": getSeroPrice,
+    "getPendingAndConfirming":getPendingAndConfirming
 }
 
 
@@ -84,9 +87,51 @@ function commitTx(message: Message) {
 
 }
 
+
+async function calAssets(selfdb:PopDB){
+    const utxos:any =await selfdb.selectAll(tables.utxo.name);
+    if(utxos && utxos.length>0){
+        let assetMap:Map<string,BigNumber> = new Map<string, BigNumber>();
+        for(let utxo of utxos){
+            const asset = utxo.Asset;
+            if(asset && asset.Tkn){
+                const cy = hexToCy(asset.Tkn.Currency);
+                const value = new BigNumber(asset.Tkn.Value);
+                if(assetMap.has(cy)){
+                    let amount = assetMap.get(cy)
+                    amount = amount.plus(value)
+                    assetMap.set(cy,amount)
+                }else{
+                    assetMap.set(cy,value);
+                }
+            }
+        }
+        let entries = assetMap.entries();
+        let rest = entries.next();
+        while (!rest.done) {
+            const cy = rest.value[0]
+            const value:BigNumber = rest.value[1]
+
+            const assetDb:any = await selfdb.select(tables.assets.name,{Currency:cy});
+            if(assetDb && assetDb.length>0){
+                const asset:AssetsInfo = assetDb[0];
+                asset.Amount = value.toString(10);
+                await selfdb.update(tables.assets.name,asset)
+            }else{
+                const asset:AssetsInfo = {
+                    Currency:cy,
+                    Amount:value.toString(10)
+                }
+                await selfdb.insert(tables.assets.name,asset)
+            }
+            rest = entries.next()
+        }
+    }
+}
+
 async function _genPrePramas(tx: Tx, acInfo: SyncInfo) {
     return new Promise((resolve, reject) => {
-        let {From, To, Value, Cy, Data, Gas, GasPrice,FeeCy,BuyShare} = tx;
+        let {From, To, Value, Cy, Data, Gas, GasPrice,FeeCy,BuyShare,FeeValue} = tx;
         if (!Cy) Cy = "SERO"
         if (!FeeCy) FeeCy = "SERO"
         if (!Gas) {
@@ -103,6 +148,9 @@ async function _genPrePramas(tx: Tx, acInfo: SyncInfo) {
         const fee = {
             Currency: utils.cyToHex(FeeCy),
             Value: new BigNumber(GasPrice, 16).multipliedBy(new BigNumber(Gas, 16)).toString(10)
+        }
+        if(FeeValue){
+            fee.Value = new BigNumber(FeeValue).toString(10);
         }
         const asset = {
             Tkn: tkn,
@@ -249,12 +297,17 @@ async function _commitTx(tx: Tx): Promise<string | null> {
         const _db = db.get(tk);
         const acInfo: SyncInfo = <SyncInfo>await _db.selectId(tables.syncInfo.name, 1)
         let preTxParam = await _genPrePramas(tx, acInfo);
+
+        console.log("preTxParam >>>> ", preTxParam);
+
         let rest:any = await genTxParam(preTxParam, new TxGenerator(), new TxState());
         if(rest.Ins && rest.Ins.length>1000){
             return  new Promise<string | null>((resolve, reject) => {
                 reject("Exceeded the maximum number of UTXOs")
             })
         }
+
+        console.log("rest >>>> ", rest);
 
         rest.Z = false;
         const signRet = signTx(tx.SK, rest)
@@ -788,13 +841,15 @@ function _startSync(): void {
                 }
                 syncRes = syncEntries.next();
             }
-            console.log("======= fetchHandler error>>> ",e);
+            console.error("======= fetchHandler error>>> ",e);
             const err = typeof e === 'string'?e:e.message;
             sendLog(`Fetch Error:`,  err)
         })
         _setLatestSyncTime();
     }
 }
+//
+
 
 async function fetchHandler() {
 
@@ -831,9 +886,8 @@ async function changeAssets(assets, utxo, db: PopDB, txType: TxType) {
 
     if (utxo.Asset.Tkn) {
         const rootType = [utxo.Root, txType].join("_");
-        const assetsUtxo = await db.select(tables.assetUtxo.name, {RootType: rootType})
+        const assetsUtxo:any = await db.select(tables.assetUtxo.name, {RootType: rootType})
         if (assets && assets.length > 0) {
-            // @ts-ignore
             if (assetsUtxo && assetsUtxo.length > 0) {
                 console.log("asset utxo has set!!", utxo.Root)
             } else {
@@ -851,7 +905,6 @@ async function changeAssets(assets, utxo, db: PopDB, txType: TxType) {
             }
 
         } else {
-            // @ts-ignore
             if (assetsUtxo && assetsUtxo.length > 0) {
                 console.log("asset utxo has set!!!", utxo.Root)
             } else {
@@ -925,8 +978,13 @@ async function _fetchOuts(db: PopDB,info:any) {
     //     start = info.CurrentBlock;
     // }
 
+    let isChangeAsset = false;
     while (true) {
         const rtn = await fetchAndIndex(info.TK, pkrIndex, info.UseHashPKr, start, end);
+        if (rtn.utxos && rtn.utxos.length > 0) {
+            console.log("rtn.utxos.length>>",rtn.utxos.length);
+            isChangeAsset = true;
+        }
         await _indexUtxos(rtn,info.TK,db)
         if (rtn.useHashPKr) {
             syncInfo.UseHashPKr = true
@@ -951,7 +1009,14 @@ async function _fetchOuts(db: PopDB,info:any) {
         }
     }
     await db.update(tables.syncInfo.name, syncInfo)
-    await _checkNil(info.TK)
+    const flag = await _checkNil(info.TK)
+    console.log("_checkNil>> ",flag);
+    if(isChangeAsset === true || flag === true){
+        await calAssets(db);
+    }
+
+    await _syncPendingAndConfirm(info.TK)
+
     // await _repair(db)
 }
 
@@ -968,9 +1033,9 @@ async function _indexUtxos(rtn:fetchRest,tk:string,db:PopDB) {
             if(utxo.Asset.Tkn){
                 await db.update(tables.utxo.name, utxo)
 
-                const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
-                const assets = await db.select(tables.assets.name, {Currency: currency});
-                await changeAssets(assets, utxo, db, TxType.in);
+                // const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
+                // const assets = await db.select(tables.assets.name, {Currency: currency});
+                // await changeAssets(assets, utxo, db, TxType.in);
             }
             if(utxo.Asset.Tkt){
                 let data = utxo;
@@ -1022,14 +1087,12 @@ async function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, 
     let hasResWithOldPkr = false
     if (data.result) {
         const blocks = data.result.BlockOuts;
-        const outs = [];
         const txInfos = [];
         let Utxos = [];
         if (blocks && blocks.length > 0) {
             for(let block of blocks){
                 let blockDatas = block.Data;
                 for(let blockData of blockDatas ){
-                    outs.push(blockData.Out);
                     let txInfo = blockData.TxInfo;
                     let utxos = jsuperzk.decOut(tk, [blockData.Out])
                     txInfo.Root = blockData.Out.Root;
@@ -1050,6 +1113,12 @@ async function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, 
                             Currency: cy,
                             id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
                         }
+                        const assetDb:any = await db.get(tk).select(tables.assets.name,{Currency:cy});
+                        if(assetDb && assetDb.length>0){
+                        }else{
+                            await db.get(tk).insert(tables.assets.name,{Currency:cy,Amount:'0'})
+                        }
+
                         await db.get(tk).update(tables.txCurrency.name, txCurrency)
                         sendLog(`(${pkrRest.pkrMain}) AddTx`,  JSON.stringify({Block:txCurrency.Num,TxHash:txCurrency.TxHash}))
                     }
@@ -1081,8 +1150,8 @@ async function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, 
             rest.useHashPKr = true
         }
 
-        console.log("rest>>>",rest);
-        return new Promise(resolve => {
+        // console.log("rest>>>",rest);
+        return new Promise((resolve,reject) => {
             resolve(rest)
         })
     }
@@ -1110,7 +1179,13 @@ interface fetchRest {
 function jsonRpcReq(_method: string, params: any) {
     return new Promise((resolve, reject) => {
         if (!rpc) {
-            reject(new Error("rpc host not set!"))
+            // reject(new Error("rpc host not set!"))
+            const localUtc = new Date().getTimezoneOffset() / 60;
+            if(localUtc === -8){
+                rpc = "https://sero-light-node.ririniannian.com";
+            }else{
+                rpc = "https://f-sero-light-node.ririniannian.com";
+            }
         }
         let data = {
             id: rpcId++,
@@ -1188,28 +1263,37 @@ enum PKrType {
 }
 
 
-async function _checkNil(tk: string) {
+async function _checkNil(tk: string):Promise<boolean> {
     const nils = await db.get(tk).selectAll(tables.nils.name)
+
+    let isChangeAsset = false;
     let nilArr = new Array<any>()
     // @ts-ignore
     for (let nil of nils) {
         nilArr.push(nil.Nil)
         if (nilArr.length >= 1000) {
-            await _innerCheckNil(nilArr)
+            const flag = await _innerCheckNil(nilArr)
+            if(flag === true && isChangeAsset === false){
+                isChangeAsset = true
+            }
             nilArr = new Array<any>()
         }
     }
     if (nilArr && nilArr.length > 0) {
-        await _innerCheckNil(nilArr)
+        const flag = await _innerCheckNil(nilArr)
+        if(flag === true && isChangeAsset === false){
+            isChangeAsset = true
+        }
     }
+    return isChangeAsset
 
-    async function _innerCheckNil(nilArr) {
+    async function _innerCheckNil(nilArr):Promise<boolean> {
         const resp = await jsonRpcReq('light_checkNil', [nilArr])
         // @ts-ignore
         if (resp && resp.data && resp.data.result) {
             // @ts-ignore
             let datas = resp.data.result
-            if (datas) {
+            if (datas && datas.length>0) {
                 for (let data of datas) {
                     let txInfo: TxInfo = data.TxInfo;
                     let nil: Nils = {Nil: data.Nil}
@@ -1245,11 +1329,12 @@ async function _checkNil(tk: string) {
                                     }
                                     await db.get(tk).update(tables.txBase.name, txBase)
 
-                                    if(utxo.Asset.Tkn){
-                                        const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
-                                        const assets = await db.get(tk).select(tables.assets.name, {Currency: currency});
-                                        await changeAssets(assets, utxo, db.get(tk), TxType.out);
-                                    }
+                                    // if(utxo.Asset.Tkn){
+                                        // const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
+                                        // const assets = await db.get(tk).select(tables.assets.name, {Currency: currency});
+                                        // await changeAssets(assets, utxo, db.get(tk), TxType.out);
+
+                                    // }
 
                                     await db.get(tk).delete(tables.utxo.name, {Root: root})
 
@@ -1265,77 +1350,153 @@ async function _checkNil(tk: string) {
                                         }
                                         await db.get(tk).update(tables.txCurrency.name, txCurrency)
                                     }
+
+
                                 }
                             }
                         }
                     }
                     await db.get(tk).update(tables.tx.name, txInfo)
                 }
+
+
+                return true
+            }else{
+                return false
             }
         }
+        return false
     }
 }
 
+async function getPendingAndConfirming(message:Message) {
+    const tk:any = message.data;
 
-async function repairAssets() {
-    let dbEntries = db.entries();
-    let dbRes = dbEntries.next();
-    while (!dbRes.done) {
-        let _db = dbRes.value[1]
-        await _repair(_db)
-        dbRes = dbEntries.next()
+    if(pendingAndConirmMap.has(tk)){
+        message.data = pendingAndConirmMap.get(tk);
+    }else{
+        message.data = [];
     }
+    _postMessage(message)
 }
 
-async function _repair(db:PopDB) {
-    console.log("Repair Data === ", db.name);
-    const assetsUtxos:any = await db.selectAll(tables.assetUtxo.name)
-    let tmpMap : Map<string,AssetsInfo> = new Map<string, AssetsInfo>()
-    for(let i=0;i<assetsUtxos.length;i++){
-        const assetsUtxo:any = assetsUtxos[i];
-        const Tkn:any = assetsUtxo.Asset.Tkn;
-        const currency:string = hexToCy(Tkn.Currency);
-        const value:string = Tkn.Value;
-        console.log(assetsUtxo.RootType,currency,value);
-        if(tmpMap.has(currency)){
-            let asinf:AssetsInfo = tmpMap.get(currency)
-            let amount
-            if(assetsUtxo.RootType.indexOf("_1")>-1){
-                amount = new BigNumber(asinf.Amount).minus(new BigNumber(value)).toString(10)
-            }else{
-                amount = new BigNumber(asinf.Amount).plus(new BigNumber(value)).toString(10)
+async function _syncPendingAndConfirm(tk:string){
+
+    const info:any = await db.get(tk).selectId(tables.syncInfo.name,1);
+
+    const pkrRest = genPKrs(tk,info.PkrIndex,true)
+    const resp:any = await jsonRpcReq("light_getPendingOuts",[pkrRest.PKrs])
+    const rests:Array<any> = [];
+    if (resp && resp.data && resp.data.result) {
+        const BlockOuts:any = resp.data.result.BlockOuts;
+
+        if(BlockOuts && BlockOuts.length>0){
+            const utxoMap:Map<string,Array<any>> = new Map<string,Array<any>>();
+            for(let block of BlockOuts){
+                const outs:any = block.Data;
+                for(let d of outs){
+                    const key:string = d.TxInfo.TxHash;
+                    if(utxoMap.has(key)){
+                        const arr:Array<any> = utxoMap.get(key);
+                        arr.push(d);
+                        utxoMap.set(key,arr);
+                    }else{
+                        utxoMap.set(key,[d]);
+                    }
+                }
             }
-            asinf.Amount = amount
-            tmpMap.set(currency,asinf)
-        }else{
-            let asinf:AssetsInfo = new class implements AssetsInfo {
-                Amount: string;
-                Currency: string;
-                Frozen: string;
-            };
-            asinf.Currency = currency;
-            if(assetsUtxo.RootType.indexOf("_1")>-1){
-                asinf.Amount = new BigNumber(value).multipliedBy(new BigNumber(-1)).toString(10);
-            }else{
-                asinf.Amount = value
+            let entries = utxoMap.entries();
+            let rest = entries.next();
+            while(!rest.done){
+                const datas = rest.value[1];
+                const txInfo =  datas[0].TxInfo;
+                const outs:Array<any> = [];
+                for(let data of datas){
+                    outs.push(data.Out);
+                }
+
+                const utxos:Array<any> = jsuperzk.decOut(tk, outs)
+                const assetMap:Map<string,string> = new Map<string,string>();
+                for(const utxo of utxos){
+                    const asset:any = utxo.Asset;
+                    if(asset.Tkn){
+                        const cy:string = utils.hexToCy(asset.Tkn.Currency);
+                        if(assetMap.has(cy)){
+                            const amount:string = assetMap.get(cy);
+                            assetMap.set(cy,new BigNumber(amount).plus(new BigNumber(asset.Tkn.Value)).toString(10))
+                        }else{
+                            assetMap.set(cy,new BigNumber(asset.Tkn.Value).toString(10))
+                        }
+                    }
+                }
+                txInfo.Tkn = assetMap
+                txInfo.isConfirm = true;
+                rests.push(txInfo)
+                rest = entries.next()
             }
-            tmpMap.set(currency,asinf)
         }
-    }
-    let entry = tmpMap.entries();
-    let res = entry.next();
-    while (!res.done) {
-        const assets:any = await db.select(tables.assets.name, {Currency: res.value[0]});
-        let asset = assets[0];
-        asset.Amount = res.value[1].Amount
-        await db.update(tables.assets.name,asset)
-        res = entry.next()
-    }
 
+    }
+    pendingAndConirmMap.set(tk,rests)
 }
 
-
-
+// async function repairAssets() {
+//     let dbEntries = db.entries();
+//     let dbRes = dbEntries.next();
+//     while (!dbRes.done) {
+//         let _db = dbRes.value[1]
+//         await _repair(_db)
+//         dbRes = dbEntries.next()
+//     }
+// }
+//
+// async function _repair(db:PopDB) {
+//     console.log("Repair Data === ", db.name);
+//     const assetsUtxos:any = await db.selectAll(tables.assetUtxo.name)
+//     let tmpMap : Map<string,AssetsInfo> = new Map<string, AssetsInfo>()
+//     for(let i=0;i<assetsUtxos.length;i++){
+//         const assetsUtxo:any = assetsUtxos[i];
+//         const Tkn:any = assetsUtxo.Asset.Tkn;
+//         const currency:string = hexToCy(Tkn.Currency);
+//         const value:string = Tkn.Value;
+//         console.log(assetsUtxo.RootType,currency,value);
+//         if(tmpMap.has(currency)){
+//             let asinf:AssetsInfo = tmpMap.get(currency)
+//             let amount
+//             if(assetsUtxo.RootType.indexOf("_1")>-1){
+//                 amount = new BigNumber(asinf.Amount).minus(new BigNumber(value)).toString(10)
+//             }else{
+//                 amount = new BigNumber(asinf.Amount).plus(new BigNumber(value)).toString(10)
+//             }
+//             asinf.Amount = amount
+//             tmpMap.set(currency,asinf)
+//         }else{
+//             let asinf:AssetsInfo = new class implements AssetsInfo {
+//                 Amount: string;
+//                 Currency: string;
+//                 Frozen: string;
+//             };
+//             asinf.Currency = currency;
+//             if(assetsUtxo.RootType.indexOf("_1")>-1){
+//                 asinf.Amount = new BigNumber(value).multipliedBy(new BigNumber(-1)).toString(10);
+//             }else{
+//                 asinf.Amount = value
+//             }
+//             tmpMap.set(currency,asinf)
+//         }
+//     }
+//     let entry = tmpMap.entries();
+//     let res = entry.next();
+//     while (!res.done) {
+//         const assets:any = await db.select(tables.assets.name, {Currency: res.value[0]});
+//         let asset = assets[0];
+//         asset.Amount = res.value[1].Amount
+//         await db.update(tables.assets.name,asset)
+//         res = entry.next()
+//     }
+//
+// }
+//
 function _setLatestSyncTime() {
     latestSyncTime = new Date().getTime();
 }

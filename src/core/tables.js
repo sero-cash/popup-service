@@ -1,6 +1,5 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.dbConfig = exports.tables = exports.TxType = void 0;
 var utxoTable = {
     name: "utxo",
     keyPath: "id",

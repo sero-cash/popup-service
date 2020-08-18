@@ -88,6 +88,11 @@ class PopupService {
         this.handlerMsg(message, cb)
     }
 
+    getPendingAndConfirming(tk:string,cb:any){
+        let message: Message = {method: Method.GetPendingAndConfirming, data: tk}
+        this.handlerMsg(message, cb)
+    }
+
     handlerMsg(message: Message, cb: any) {
         if (cb) {
             const messageId = this.messageId++;

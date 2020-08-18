@@ -31,6 +31,7 @@ export enum Method {
     GetPKrIndex = "getPKrIndex",
     CommitTx = "commitTx",
     GetPrice = "getPrice",
+    GetPendingAndConfirming = "getPendingAndConfirming"
 }
 
 
@@ -46,6 +47,7 @@ export interface Tx {
     FeeCy?:string
     Tkts?:Map<string,string>
     BuyShare:BuyShareCmd
+    FeeValue?:string
 }
 
 export interface BuyShareCmd {
