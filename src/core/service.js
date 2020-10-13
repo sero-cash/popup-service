@@ -444,6 +444,9 @@ var TxGenerator = /** @class */ (function () {
                                         var tkn = utxo_3.Asset.Tkn;
                                         if (tkn) {
                                             if (utils_1.hexToCy(tkn.Currency) === currency) {
+                                                if (remain.isNeg() || remain.isZero()) {
+                                                    break;
+                                                }
                                                 var now = new Date().getTime();
                                                 var latest = utxo_3["timestamp"];
                                                 if (latest && now - latest < 12 * 14 * 1000) {
@@ -453,9 +456,6 @@ var TxGenerator = /** @class */ (function () {
                                                 utxos.push(utxo_3);
                                                 var amount = utils_1.default.toBN(tkn.Value);
                                                 remain = remain.sub(amount);
-                                                if (remain.isNeg() || remain.isZero()) {
-                                                    break;
-                                                }
                                             }
                                         }
                                     }

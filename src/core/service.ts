@@ -364,6 +364,9 @@ class TxGenerator {
                     let tkn = utxo.Asset.Tkn;
                     if(tkn) {
                         if (hexToCy(tkn.Currency) === currency) {
+                            if (remain.isNeg() || remain.isZero()) {
+                                break;
+                            }
                             const now = new Date().getTime();
                             const latest = utxo["timestamp"];
                             if (latest && now - latest < 12 * 14 * 1000) {
@@ -373,9 +376,6 @@ class TxGenerator {
                             utxos.push(utxo)
                             let amount = utils.toBN(tkn.Value);
                             remain = remain.sub(amount);
-                            if (remain.isNeg() || remain.isZero()) {
-                                break;
-                            }
                         }
                     }
                 }
