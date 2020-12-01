@@ -184,7 +184,7 @@ var dbConfig = {
         assetsUtxoTable,
         txCurrencyTable,
     ],
-    version: 2
+    version: 4
 };
 exports.dbConfig = dbConfig;
 var tables = {

@@ -106,24 +106,30 @@ async function calAssets(selfdb:PopDB){
                 }
             }
         }
+
+        const assetsDb:any = await selfdb.selectAll(tables.assets.name);
+        for(let assetDb of assetsDb){
+            if(assetMap.has(assetDb.Currency)){
+                const asset:AssetsInfo = assetDb;
+                asset.Amount = assetMap.get(assetDb.Currency).toString(10);
+                await selfdb.update(tables.assets.name,asset)
+                assetMap.delete(assetDb.Currency)
+            }else{
+                assetDb.Amount = "0";
+                await selfdb.update(tables.assets.name,assetDb)
+            }
+        }
+
         let entries = assetMap.entries();
         let rest = entries.next();
         while (!rest.done) {
             const cy = rest.value[0]
             const value:BigNumber = rest.value[1]
-
-            const assetDb:any = await selfdb.select(tables.assets.name,{Currency:cy});
-            if(assetDb && assetDb.length>0){
-                const asset:AssetsInfo = assetDb[0];
-                asset.Amount = value.toString(10);
-                await selfdb.update(tables.assets.name,asset)
-            }else{
-                const asset:AssetsInfo = {
-                    Currency:cy,
-                    Amount:value.toString(10)
-                }
-                await selfdb.insert(tables.assets.name,asset)
+            const asset:AssetsInfo = {
+                Currency:cy,
+                Amount:value.toString(10)
             }
+            await selfdb.insert(tables.assets.name,asset)
             rest = entries.next()
         }
     }
@@ -280,7 +286,7 @@ async function _storePending(tk, signRet, tx: Tx, _db) {
         Num: txInfo.Num,
         TxHash: txInfo.TxHash,
         Currency: tx.Cy,
-        id: [txInfo.Num, txInfo.TxHash, tx.Cy].join("_"),
+        id: [pendLeft(txInfo.Num.toString()), txInfo.TxHash, tx.Cy].join("_"),
     }
     await db.get(tk).update(tables.txCurrency.name, txCurrency)
 }
@@ -940,7 +946,7 @@ function _deletePending(db: PopDB, txData) {
             }).catch(err => {
                 console.log(err.message);
             });
-            db.delete(tables.txCurrency.name, {"TxHash": txData.TxHash}).then(res => {
+            db.delete(tables.txCurrency.name, {"Num":99999999999,TxHash:txData.TxHash}).then(res => {
             }).catch(err => {
                 console.log(err.message);
             });
@@ -1010,7 +1016,7 @@ async function _fetchOuts(db: PopDB,info:any) {
     }
     await db.update(tables.syncInfo.name, syncInfo)
     const flag = await _checkNil(info.TK)
-    console.log("_checkNil>> ",flag);
+    console.log("_checkNil>> ",flag,isChangeAsset);
     if(isChangeAsset === true || flag === true){
         await calAssets(db);
     }
@@ -1111,7 +1117,7 @@ async function fetchAndIndex(tk: string, pkrIndex: number, useHashPkr: boolean, 
                             Num: txInfo.Num,
                             TxHash: txInfo.TxHash,
                             Currency: cy,
-                            id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
+                            id: [pendLeft(txInfo.Num.toString()), txInfo.TxHash, cy].join("_"),
                         }
                         const assetDb:any = await db.get(tk).select(tables.assets.name,{Currency:cy});
                         if(assetDb && assetDb.length>0){
@@ -1330,9 +1336,9 @@ async function _checkNil(tk: string):Promise<boolean> {
                                     await db.get(tk).update(tables.txBase.name, txBase)
 
                                     // if(utxo.Asset.Tkn){
-                                        // const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
-                                        // const assets = await db.get(tk).select(tables.assets.name, {Currency: currency});
-                                        // await changeAssets(assets, utxo, db.get(tk), TxType.out);
+                                    // const currency = utils.hexToCy(utxo.Asset.Tkn.Currency);
+                                    // const assets = await db.get(tk).select(tables.assets.name, {Currency: currency});
+                                    // await changeAssets(assets, utxo, db.get(tk), TxType.out);
 
                                     // }
 
@@ -1346,7 +1352,7 @@ async function _checkNil(tk: string):Promise<boolean> {
                                             Num: txInfo.Num,
                                             TxHash: txInfo.TxHash,
                                             Currency: utils.hexToCy(utxo.Asset.Tkn.Currency),
-                                            id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
+                                            id: [pendLeft(txInfo.Num.toString()), txInfo.TxHash, cy].join("_"),
                                         }
                                         await db.get(tk).update(tables.txCurrency.name, txCurrency)
                                     }
@@ -1499,4 +1505,12 @@ async function _syncPendingAndConfirm(tk:string){
 //
 function _setLatestSyncTime() {
     latestSyncTime = new Date().getTime();
+}
+
+function pendLeft(v:string) {
+    let t = "a"
+    for(let i=0;i<12-v.length;i++){
+        t += "0"
+    }
+    return t+v;
 }

@@ -196,7 +196,7 @@ const dbConfig: Database = {
         assetsUtxoTable,
         txCurrencyTable,
     ],
-    version: 2
+    version: 4
 }
 
 const tables = {

@@ -109,13 +109,13 @@ function commitTx(message) {
 }
 function calAssets(selfdb) {
     return __awaiter(this, void 0, void 0, function () {
-        var utxos, assetMap, _i, utxos_1, utxo_1, asset, cy, value, amount, entries, rest, cy, value, assetDb, asset, asset;
-        return __generator(this, function (_a) {
-            switch (_a.label) {
+        var utxos, assetMap, _i, utxos_1, utxo_1, asset, cy, value, amount, assetsDb, _a, assetsDb_1, assetDb, asset, entries, rest, cy, value, asset;
+        return __generator(this, function (_b) {
+            switch (_b.label) {
                 case 0: return [4 /*yield*/, selfdb.selectAll(tables_1.tables.utxo.name)];
                 case 1:
-                    utxos = _a.sent();
-                    if (!(utxos && utxos.length > 0)) return [3 /*break*/, 8];
+                    utxos = _b.sent();
+                    if (!(utxos && utxos.length > 0)) return [3 /*break*/, 11];
                     assetMap = new Map();
                     for (_i = 0, utxos_1 = utxos; _i < utxos_1.length; _i++) {
                         utxo_1 = utxos_1[_i];
@@ -133,36 +133,49 @@ function calAssets(selfdb) {
                             }
                         }
                     }
-                    entries = assetMap.entries();
-                    rest = entries.next();
-                    _a.label = 2;
+                    return [4 /*yield*/, selfdb.selectAll(tables_1.tables.assets.name)];
                 case 2:
-                    if (!!rest.done) return [3 /*break*/, 8];
-                    cy = rest.value[0];
-                    value = rest.value[1];
-                    return [4 /*yield*/, selfdb.select(tables_1.tables.assets.name, { Currency: cy })];
+                    assetsDb = _b.sent();
+                    _a = 0, assetsDb_1 = assetsDb;
+                    _b.label = 3;
                 case 3:
-                    assetDb = _a.sent();
-                    if (!(assetDb && assetDb.length > 0)) return [3 /*break*/, 5];
-                    asset = assetDb[0];
-                    asset.Amount = value.toString(10);
+                    if (!(_a < assetsDb_1.length)) return [3 /*break*/, 8];
+                    assetDb = assetsDb_1[_a];
+                    if (!assetMap.has(assetDb.Currency)) return [3 /*break*/, 5];
+                    asset = assetDb;
+                    asset.Amount = assetMap.get(assetDb.Currency).toString(10);
                     return [4 /*yield*/, selfdb.update(tables_1.tables.assets.name, asset)];
                 case 4:
-                    _a.sent();
+                    _b.sent();
+                    assetMap.delete(assetDb.Currency);
                     return [3 /*break*/, 7];
                 case 5:
+                    assetDb.Amount = "0";
+                    return [4 /*yield*/, selfdb.update(tables_1.tables.assets.name, assetDb)];
+                case 6:
+                    _b.sent();
+                    _b.label = 7;
+                case 7:
+                    _a++;
+                    return [3 /*break*/, 3];
+                case 8:
+                    entries = assetMap.entries();
+                    rest = entries.next();
+                    _b.label = 9;
+                case 9:
+                    if (!!rest.done) return [3 /*break*/, 11];
+                    cy = rest.value[0];
+                    value = rest.value[1];
                     asset = {
                         Currency: cy,
                         Amount: value.toString(10)
                     };
                     return [4 /*yield*/, selfdb.insert(tables_1.tables.assets.name, asset)];
-                case 6:
-                    _a.sent();
-                    _a.label = 7;
-                case 7:
+                case 10:
+                    _b.sent();
                     rest = entries.next();
-                    return [3 /*break*/, 2];
-                case 8: return [2 /*return*/];
+                    return [3 /*break*/, 9];
+                case 11: return [2 /*return*/];
             }
         });
     });
@@ -324,7 +337,7 @@ function _storePending(tk, signRet, tx, _db) {
                         Num: txInfo.Num,
                         TxHash: txInfo.TxHash,
                         Currency: tx.Cy,
-                        id: [txInfo.Num, txInfo.TxHash, tx.Cy].join("_"),
+                        id: [pendLeft(txInfo.Num.toString()), txInfo.TxHash, tx.Cy].join("_"),
                     };
                     return [4 /*yield*/, db.get(tk).update(tables_1.tables.txCurrency.name, txCurrency)];
                 case 3:
@@ -1100,7 +1113,7 @@ function _deletePending(db, txData) {
             }).catch(function (err) {
                 console.log(err.message);
             });
-            db.delete(tables_1.tables.txCurrency.name, { "TxHash": txData.TxHash }).then(function (res) {
+            db.delete(tables_1.tables.txCurrency.name, { "Num": 99999999999, TxHash: txData.TxHash }).then(function (res) {
             }).catch(function (err) {
                 console.log(err.message);
             });
@@ -1165,7 +1178,7 @@ function _fetchOuts(db, info) {
                     return [4 /*yield*/, _checkNil(info.TK)];
                 case 9:
                     flag = _a.sent();
-                    console.log("_checkNil>> ", flag);
+                    console.log("_checkNil>> ", flag, isChangeAsset);
                     if (!(isChangeAsset === true || flag === true)) return [3 /*break*/, 11];
                     return [4 /*yield*/, calAssets(db)];
                 case 10:
@@ -1322,7 +1335,7 @@ function fetchAndIndex(tk, pkrIndex, useHashPkr, start, end) {
                         Num: txInfo.Num,
                         TxHash: txInfo.TxHash,
                         Currency: cy,
-                        id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
+                        id: [pendLeft(txInfo.Num.toString()), txInfo.TxHash, cy].join("_"),
                     };
                     return [4 /*yield*/, db.get(tk).select(tables_1.tables.assets.name, { Currency: cy })];
                 case 4:
@@ -1558,7 +1571,7 @@ function _checkNil(tk) {
                                 Num: txInfo.Num,
                                 TxHash: txInfo.TxHash,
                                 Currency: utils_1.default.hexToCy(utxo_6.Asset.Tkn.Currency),
-                                id: [txInfo.Num, txInfo.TxHash, cy].join("_"),
+                                id: [pendLeft(txInfo.Num.toString()), txInfo.TxHash, cy].join("_"),
                             };
                             return [4 /*yield*/, db.get(tk).update(tables_1.tables.txCurrency.name, txCurrency)];
                         case 11:
@@ -1768,5 +1781,12 @@ function _syncPendingAndConfirm(tk) {
 //
 function _setLatestSyncTime() {
     latestSyncTime = new Date().getTime();
+}
+function pendLeft(v) {
+    var t = "a";
+    for (var i = 0; i < 12 - v.length; i++) {
+        t += "0";
+    }
+    return t + v;
 }
 //# sourceMappingURL=service.js.map

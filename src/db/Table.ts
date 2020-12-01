@@ -18,15 +18,51 @@ export class Table {
     }
 
     // get
-    select(selector: any) {
-        let index: string
-        let indexValue: any
-        for (let name in selector) {
-            index = name;
-            indexValue = selector[name]
+    async select(selector: any):Promise<any> {
+        if(Object.keys(selector).length == 1){
+            let index:any;
+            let value:any;
+            for(let name in selector){
+                index = name;
+                value = selector[name];
+            }
+            return new Promise((resolve, reject) => {
+                const selectRequest = this.request().index(index).getAll(value)
+                selectRequest.onsuccess = (e: any) => {
+                    resolve(e.target.result)
+                }
+                selectRequest.onerror = (e: any) => {
+                    reject(e.target.result)
+                }
+            })
+        }else{
+            let rets:Array<any> = [];
+            for (let name in selector) {
+                const rest:any = await this._iSelect(name,selector[name])
+                rets.push(rest);
+            }
+            let retTmp:Array<any> = [];
+            for(let datas of rets){
+                for(let data of datas){
+                    let f:boolean = true
+                    for(let name in selector){
+                        if(data[name] != selector[name]){
+                            f = false;
+                            break;
+                        }
+                    }
+                    if(f){
+                        retTmp.push(data)
+                    }
+                }
+            }
+            return retTmp
         }
+    }
+
+    async _iSelect(index:string,value:any){
         return new Promise((resolve, reject) => {
-            const selectRequest = this.request().index(index).getAll(indexValue)
+            const selectRequest = this.request().index(index).getAll(value)
             selectRequest.onsuccess = (e: any) => {
                 resolve(e.target.result)
             }
