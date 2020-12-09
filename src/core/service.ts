@@ -455,15 +455,17 @@ function getPKrIndex(message: Message) {
         return
     }
     db.get(tk).selectId(tables.syncInfo.name, 1).then((info: SyncInfo) => {
-        info.TK = ""
-        // let version = 1;
-        // let isNew = isNewVersion(utils.toBuffer(tk));
-        // if (isNew) {
-        //     version = 2
-        // }
-        // info.PKr = jsuperzk.createPkrHash(tk, info.PkrIndex, version)
-        message.data = info
-        _postMessage(message)
+        if(info){
+            info.TK = ""
+            // let version = 1;
+            // let isNew = isNewVersion(utils.toBuffer(tk));
+            // if (isNew) {
+            //     version = 2
+            // }
+            // info.PKr = jsuperzk.createPkrHash(tk, info.PkrIndex, version)
+            message.data = info
+            _postMessage(message)
+        }
     }).catch(err => {
         message.error = err;
         _postMessage(message)
@@ -1200,12 +1202,51 @@ function jsonRpcReq(_method: string, params: any) {
             params: params
         };
 
-        return axios.post(rpc, data).then(response => {
-            resolve(response)
-        }).catch(e => {
-            reject(e)
-        })
+        // return axios.post(rpc, data).then(response => {
+        //     resolve(response)
+        // }).catch(e => {
+        //     reject(e)
+        // })
     })
+}
+
+
+const httpPostAsync = async (url,data) => {
+    return new Promise(((resolve,reject) => {
+        // @ts-ignore
+        if (plus && plus.net) {
+            // @ts-ignore
+            const xhr = new plus.net.XMLHttpRequest();
+            xhr.timeout = 20 * 1000;
+            xhr.onreadystatechange = function () {
+                switch (xhr.readyState) {
+                    case 0:
+                    case 1:
+                    case 2:
+                    case 3:
+                        break;
+                    case 4:
+                        if (xhr.status === 200) {
+                            resolve(xhr.responseText)
+                        } else {
+                            reject(xhr.readyState)
+                        }
+                        break;
+                    default :
+                        break;
+                }
+            }
+            xhr.open("POST", url);
+            xhr.send(JSON.stringify(data));
+        }else{
+            axios.post(rpc, data).then(response=>{
+                resolve(response.data);
+            }).catch(e=>{
+                reject(e)
+            });
+        }
+    }))
+
 }
 
 

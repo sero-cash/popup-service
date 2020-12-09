@@ -557,15 +557,17 @@ function getPKrIndex(message) {
         return;
     }
     db.get(tk).selectId(tables_1.tables.syncInfo.name, 1).then(function (info) {
-        info.TK = "";
-        // let version = 1;
-        // let isNew = isNewVersion(utils.toBuffer(tk));
-        // if (isNew) {
-        //     version = 2
-        // }
-        // info.PKr = jsuperzk.createPkrHash(tk, info.PkrIndex, version)
-        message.data = info;
-        _postMessage(message);
+        if (info) {
+            info.TK = "";
+            // let version = 1;
+            // let isNew = isNewVersion(utils.toBuffer(tk));
+            // if (isNew) {
+            //     version = 2
+            // }
+            // info.PKr = jsuperzk.createPkrHash(tk, info.PkrIndex, version)
+            message.data = info;
+            _postMessage(message);
+        }
     }).catch(function (err) {
         message.error = err;
         _postMessage(message);
@@ -1418,13 +1420,53 @@ function jsonRpcReq(_method, params) {
             method: _method,
             params: params
         };
-        return axios_1.default.post(rpc, data).then(function (response) {
-            resolve(response);
-        }).catch(function (e) {
-            reject(e);
-        });
+        // return axios.post(rpc, data).then(response => {
+        //     resolve(response)
+        // }).catch(e => {
+        //     reject(e)
+        // })
     });
 }
+var httpPostAsync = function (url, data) { return __awaiter(void 0, void 0, void 0, function () {
+    return __generator(this, function (_a) {
+        return [2 /*return*/, new Promise((function (resolve, reject) {
+                // @ts-ignore
+                if (plus && plus.net) {
+                    // @ts-ignore
+                    var xhr_1 = new plus.net.XMLHttpRequest();
+                    xhr_1.timeout = 20 * 1000;
+                    xhr_1.onreadystatechange = function () {
+                        switch (xhr_1.readyState) {
+                            case 0:
+                            case 1:
+                            case 2:
+                            case 3:
+                                break;
+                            case 4:
+                                if (xhr_1.status === 200) {
+                                    resolve(xhr_1.responseText);
+                                }
+                                else {
+                                    reject(xhr_1.readyState);
+                                }
+                                break;
+                            default:
+                                break;
+                        }
+                    };
+                    xhr_1.open("POST", url);
+                    xhr_1.send(JSON.stringify(data));
+                }
+                else {
+                    axios_1.default.post(rpc, data).then(function (response) {
+                        resolve(response.data);
+                    }).catch(function (e) {
+                        reject(e);
+                    });
+                }
+            }))];
+    });
+}); };
 function genPKrs(tk, index, useHashPkr) {
     var pkrs = new Array();
     var pkrTypeMap = new Map();
